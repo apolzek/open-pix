@@ -1,0 +1,112 @@
+{
+  "psp": {
+    "ispb": "12345678",
+    "name": "My PSP",
+    "homologationStartDate": "2024-01-15"
+  },
+  "phases": {
+    "basicConnectivity": {
+      "status": "not_started",
+      "tests": {
+        "icomHealthCheck": { "status": "pending", "lastRun": null, "notes": "" },
+        "firstPacs008": { "status": "pending", "lastRun": null, "notes": "" },
+        "firstPacs002": { "status": "pending", "lastRun": null, "notes": "" },
+        "pollMessages": { "status": "pending", "lastRun": null, "notes": "" }
+      }
+    },
+    "spiFunctionality": {
+      "status": "not_started",
+      "scheduledDate": null,
+      "tests": {
+        "sendPacs008Manu": { "status": "pending", "lastRun": null, "notes": "" },
+        "sendPacs008Dict": { "status": "pending", "lastRun": null, "notes": "" },
+        "receivePacs008": { "status": "pending", "lastRun": null, "notes": "" },
+        "sendPacs002Acsp": { "status": "pending", "lastRun": null, "notes": "" },
+        "sendPacs002Rjct": { "status": "pending", "lastRun": null, "notes": "" },
+        "sendPacs004Md06": { "status": "pending", "lastRun": null, "notes": "" },
+        "sendPacs004Frad": { "status": "pending", "lastRun": null, "notes": "" },
+        "receivePacs004": { "status": "pending", "lastRun": null, "notes": "" }
+      }
+    },
+    "spiCapacity": {
+      "status": "not_started",
+      "scheduledDate": null,
+      "tests": {
+        "warmUp": { "status": "pending", "lastRun": null, "result": null, "notes": "" },
+        "rehearsal": { "status": "pending", "lastRun": null, "result": null, "notes": "" },
+        "fullCapacity": {
+          "status": "pending",
+          "lastRun": null,
+          "result": {
+            "totalSent": 0,
+            "totalReceived": 0,
+            "durationMinutes": 0,
+            "ratePerMinute": 0,
+            "passed": false
+          },
+          "notes": ""
+        }
+      }
+    },
+    "dictFunctionality": {
+      "status": "not_started",
+      "scheduledDate": null,
+      "tests": {
+        "createKeys": { "status": "pending", "keyTypes": [], "lastRun": null, "notes": "" },
+        "lookupKeys": { "status": "pending", "lastRun": null, "notes": "" },
+        "deleteKeys": { "status": "pending", "lastRun": null, "notes": "" },
+        "portabilityClaim": { "status": "pending", "lastRun": null, "notes": "" },
+        "ownershipClaim": { "status": "pending", "lastRun": null, "notes": "" },
+        "infractionReport": { "status": "pending", "lastRun": null, "notes": "" },
+        "refundSolicitation": { "status": "pending", "lastRun": null, "notes": "" }
+      }
+    },
+    "dictCapacity": {
+      "status": "not_started",
+      "scheduledDate": null,
+      "tests": {
+        "bulkLookup": {
+          "status": "pending",
+          "lastRun": null,
+          "result": {
+            "totalLookups": 0,
+            "successful": 0,
+            "failed": 0,
+            "durationSeconds": 0,
+            "passed": false
+          },
+          "notes": ""
+        }
+      }
+    },
+    "qrCode": {
+      "status": "not_started",
+      "tests": {
+        "staticQr": { "status": "pending", "lastRun": null, "notes": "" },
+        "cobQr": { "status": "pending", "lastRun": null, "notes": "" },
+        "cobvQr": { "status": "pending", "lastRun": null, "notes": "" }
+      }
+    },
+    "advancedFeatures": {
+      "status": "not_started",
+      "tests": {
+        "pixAutomatico": { "status": "pending", "lastRun": null, "notes": "" },
+        "med2": { "status": "pending", "lastRun": null, "notes": "" }
+      }
+    },
+    "goLive": {
+      "status": "not_started",
+      "productionCutoverDate": null,
+      "checklist": {
+        "allPhasesCompleted": false,
+        "productionCertsInstalled": false,
+        "productionIcomConnected": false,
+        "piAccountFunded": false,
+        "monitoringConfigured": false,
+        "incidentProcessDefined": false
+      }
+    }
+  },
+  "timeline": [],
+  "notes": ""
+}

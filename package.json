@@ -1,0 +1,38 @@
+{
+  "name": "open-pix",
+  "version": "1.0.0",
+  "description": "Open-source toolkit for Pix Direct Participant homologation with Bacen",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "generate:cpf": "tsx scripts/utils/cpf-cnpj-generator.ts",
+    "generate:test-data": "tsx scripts/utils/test-data-generator.ts",
+    "generate:e2eid": "tsx scripts/utils/endtoendid-generator.ts",
+    "generate:pacs008": "tsx scripts/spi/pacs008-generator.ts",
+    "generate:pacs002": "tsx scripts/spi/pacs002-generator.ts",
+    "generate:pacs004": "tsx scripts/spi/pacs004-generator.ts",
+    "generate:qr": "tsx scripts/qrcode/qr-generator.ts",
+    "parse:qr": "tsx scripts/qrcode/qr-parser.ts",
+    "send:pix": "tsx scripts/spi/send-pix.ts",
+    "dict:create-keys": "tsx scripts/dict/key-bulk-creator.ts",
+    "dict:lookup": "tsx scripts/dict/key-lookup.ts",
+    "dict:claim": "tsx scripts/dict/claims-helper.ts",
+    "dict:infraction": "tsx scripts/dict/infraction-helper.ts",
+    "dict:refund": "tsx scripts/dict/refund-helper.ts",
+    "test:spi-capacity": "k6 run scripts/spi/k6-spi-capacity.js",
+    "test:dict-capacity": "k6 run scripts/dict/k6-dict-capacity.js"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^4.3.0",
+    "crc-32": "^1.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}

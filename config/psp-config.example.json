@@ -1,0 +1,47 @@
+{
+  "psp": {
+    "ispb": "12345678",
+    "name": "My PSP",
+    "participantType": "DIRETO"
+  },
+  "icom": {
+    "baseUrl": "https://icom-h.pi.rsfn.net.br:16522",
+    "pollPath": "/api/v1/in/{ispb}/msgs",
+    "sendPath": "/api/v1/out/{ispb}/msgs",
+    "maxPollConnections": 6,
+    "pollIntervalMs": 1000
+  },
+  "dict": {
+    "baseUrl": "https://dict-h.pi.rsfn.net.br",
+    "apiVersion": "v2"
+  },
+  "mtls": {
+    "certPath": "./certs/client.pem",
+    "keyPath": "./certs/client-key.pem",
+    "caPath": "./certs/ca-chain.pem",
+    "passphrase": ""
+  },
+  "bacen": {
+    "spiIspb": "99999004",
+    "dictIspb": "99999060"
+  },
+  "partner": {
+    "ispb": "",
+    "name": "",
+    "accounts": []
+  },
+  "piAccount": {
+    "branch": "0001",
+    "number": ""
+  },
+  "httpClient": {
+    "maxSockets": 50,
+    "keepAlive": true,
+    "timeoutMs": 30000
+  },
+  "loadTest": {
+    "spiCapacityRate": 2000,
+    "spiCapacityDuration": "10m",
+    "dictCapacityLookups": 1000
+  }
+}

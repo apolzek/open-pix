@@ -1,0 +1,21 @@
+Step,Phase,Test Case,Direction,Message Type,Expected Result,Status,Notes
+1,Basic Connectivity,ICOM health check,N/A,HTTP GET,200 OK response,TODO,Verify mTLS cert is valid
+2,Basic Connectivity,First pacs.008 send,Send,pacs.008,Message accepted by SPI,TODO,Start with R$ 0.01
+3,Basic Connectivity,First pacs.002 receive,Receive,pacs.002,Status ACSP received,TODO,Must arrive within 10s
+4,Basic Connectivity,Poll for messages,Receive,HTTP GET,Messages retrieved,TODO,Use up to 6 connections
+5,SPI Functionality,Send pacs.008 (MANU),Send,pacs.008,Accepted,TODO,Manual instrument
+6,SPI Functionality,Send pacs.008 (DICT),Send,pacs.008,Accepted,TODO,DICT local instrument
+7,SPI Functionality,Receive pacs.008,Receive,pacs.008,Process and respond,TODO,
+8,SPI Functionality,Send pacs.002 (ACSP),Send,pacs.002,Accepted,TODO,Positive acknowledgment
+9,SPI Functionality,Send pacs.002 (RJCT),Send,pacs.002,Accepted,TODO,With rejection reason
+10,SPI Functionality,Send pacs.004 (MD06),Send,pacs.004,Devolution accepted,TODO,Customer request
+11,SPI Functionality,Send pacs.004 (FRAD),Send,pacs.004,Devolution accepted,TODO,Fraud return
+12,SPI Functionality,Receive pacs.004,Receive,pacs.004,Process devolution,TODO,
+13,SPI Functionality,Version compatibility,Send,pacs.008,Test v1.11/1.12/1.13,TODO,Check which version Bacen accepts
+14,SPI Functionality,Error handling,Send,pacs.008,Handle AB03 timeout,TODO,Simulate slow response
+15,SPI Capacity (Rehearsal),Warm-up test (100 txns),Both,pacs.008/002,All processed,TODO,Before scheduling with Bacen
+16,SPI Capacity (Rehearsal),Sustained rate (500/min),Both,pacs.008/002,Stable throughput,TODO,5-minute test
+17,SPI Capacity,Full capacity test,Both,pacs.008/002,20k in 10min,TODO,Schedule with Bacen
+18,SPI Capacity,Verify sender rate,Send,pacs.008,2000/min sustained,TODO,Monitor with /stats
+19,SPI Capacity,Verify receiver rate,Receive,pacs.008,2000/min sustained,TODO,Respond with pacs.002
+20,SPI Capacity,Post-test validation,N/A,N/A,All txns reconciled,TODO,Verify with Bacen report

@@ -1,0 +1,25 @@
+Step,Phase,Test Case,Key Type,Action,Expected Result,Status,Notes
+1,DICT Functionality,Create CPF key,CPF,CreateKey,Key created successfully,TODO,
+2,DICT Functionality,Create CNPJ key,CNPJ,CreateKey,Key created successfully,TODO,
+3,DICT Functionality,Create EMAIL key,EMAIL,CreateKey,Key created successfully,TODO,
+4,DICT Functionality,Create PHONE key,PHONE,CreateKey,Key created successfully,TODO,
+5,DICT Functionality,Create EVP key,EVP,CreateKey,Key created (UUID format),TODO,
+6,DICT Functionality,Lookup CPF key,CPF,GetKey,Account info returned,TODO,
+7,DICT Functionality,Lookup EMAIL key,EMAIL,GetKey,Account info returned,TODO,
+8,DICT Functionality,Lookup PHONE key,PHONE,GetKey,Account info returned,TODO,
+9,DICT Functionality,Lookup EVP key,EVP,GetKey,Account info returned,TODO,
+10,DICT Functionality,Delete key,EVP,DeleteKey,Key deleted successfully,TODO,
+11,DICT Functionality,Portability claim (create),PHONE,CreateClaim PORTABILITY,Claim created,TODO,
+12,DICT Functionality,Portability claim (confirm),PHONE,ConfirmClaim,Claim completed,TODO,
+13,DICT Functionality,Ownership claim (create),PHONE,CreateClaim OWNERSHIP,Claim created,TODO,Use PHONE only (Resolution 457/2025)
+14,DICT Functionality,Ownership claim (confirm),PHONE,ConfirmClaim,Claim completed,TODO,
+15,DICT Functionality,Ownership claim (cancel),PHONE,CancelClaim,Claim cancelled,TODO,
+16,DICT Functionality,Create infraction report,N/A,CreateInfractionReport,Report created,TODO,Requires completed transaction
+17,DICT Functionality,Accept infraction report,N/A,AcceptInfractionReport,Report accepted,TODO,
+18,DICT Functionality,Reject infraction report,N/A,RejectInfractionReport,Report rejected,TODO,
+19,DICT Functionality,Cancel infraction report,N/A,CancelInfractionReport,Report cancelled,TODO,
+20,DICT Functionality,Create refund (fraud),N/A,CreateRefund FRAUD,Refund created,TODO,Requires accepted infraction
+21,DICT Functionality,Create refund (operational),N/A,CreateRefund OPERATIONAL_FLAW,Refund created,TODO,
+22,DICT Functionality,Close refund,N/A,CloseRefund,Refund closed,TODO,
+23,DICT Capacity,Bulk key lookup (1000+),EMAIL,GetKey x1000,All lookups successful,TODO,Use Bacen test keys
+24,DICT Capacity,Verify lookup rate,EMAIL,GetKey batch,Consistent throughput,TODO,Target: 200+/min
