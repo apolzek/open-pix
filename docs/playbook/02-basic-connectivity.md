@@ -67,6 +67,10 @@ curl -v \
   https://icom-h.pi.rsfn.net.br:16522/api/v1/in/{ISPB}/msgs
 ```
 
+- **CA bundle** (`ca` / `--cacert`): validates the **Bacen/RSFN server certificate chain**.
+- **Client certificate + private key** (`cert`+`key` / `--cert`+`--key`): authenticate **your institution** to ICOM in mTLS.
+- See also: [`ICOM API mTLS Requirements`](../reference/icom-api.md#mtls-requirements).
+
 ### Trust Chain
 
 You must have the complete CA certificate chain for the RSFN servers in your trust store. If you get TLS errors like `UNABLE_TO_VERIFY_LEAF_SIGNATURE` or `CERT_UNTRUSTED`, the CA bundle is likely incomplete.
@@ -82,10 +86,10 @@ A successful response looks like:
 
 If you see:
 
-- **HTTP 401/403**: Certificate authentication failed
+- **HTTP 401/403**: Client certificate/private key authentication failed
 - **HTTP 404**: Wrong ISPB or malformed URL
 - **Connection refused / timeout**: Network connectivity issue (firewall, routing, port blocked)
-- **TLS handshake failure**: Certificate problem (wrong cert, expired, trust chain issue)
+- **TLS handshake failure**: Certificate problem (incomplete CA bundle/trust chain, wrong cert, expired cert, key mismatch)
 
 Getting a successful health check response is your first milestone. Celebrate it. Many teams spend days resolving certificate and network issues to get here.
 
