@@ -1,10 +1,15 @@
 /**
  * k6 Load Test for SPI Capacity Homologation.
  *
- * Bacen requirements:
- * - 20,000 transactions in 10 minutes (2,000/min)
- * - Must operate as BOTH sender and receiver simultaneously
- * - All transactions must complete with pacs.002 within timeout
+ * Bacen requirements (Roteiro para Participacao Direta no SPI, item 7):
+ * - pacs.008 with priority HIGH to 99999A04 (virtual credit union, answers
+ *   ACSP) spread over 10 minutes, by PSP size (PSP_TIER):
+ *     small  - up to 1M accounts:   10,000 msgs (1,000/min)
+ *     medium - up to 10M accounts:  20,000 msgs (2,000/min)  [default]
+ *     large  - above 10M accounts:  40,000 msgs (4,000/min)
+ * - The receiving test (pacs.008 from 99999A03) runs at the same time.
+ * - Pass criteria: full settlement cycle within the 10 minutes and at least
+ *   99% of the pacs.002 sent by the SPI consumed within 200 ms.
  *
  * This script calls the batch-sender HTTP endpoint which handles
  * the actual ICOM communication.
@@ -28,14 +33,16 @@ const pixLatency = new Trend("pix_latency", true);
 
 // Configuration
 const BATCH_SENDER_URL = __ENV.BATCH_SENDER_URL || "http://localhost:3100";
+const TIERS = { small: 1000, medium: 2000, large: 4000 };
+const RATE_PER_MIN = TIERS[__ENV.PSP_TIER || "medium"] || TIERS.medium;
 
 export const options = {
   scenarios: {
     spi_capacity: {
       executor: "constant-arrival-rate",
-      rate: 2000,             // 2000 iterations per timeUnit
-      timeUnit: "1m",         // per minute
-      duration: "10m",        // for 10 minutes = 20,000 total
+      rate: RATE_PER_MIN,     // iterations per minute, see PSP_TIER
+      timeUnit: "1m",
+      duration: "10m",
       preAllocatedVUs: 20,    // initial VUs
       maxVUs: 500,            // scale up if needed
     },
@@ -64,7 +71,7 @@ export function setup() {
   }
 
   console.log("SPI Capacity Test starting...");
-  console.log(`Target: 20,000 transactions in 10 minutes (2,000/min)`);
+  console.log(`Target: ${RATE_PER_MIN * 10} transactions in 10 minutes (${RATE_PER_MIN}/min)`);
   console.log(`Batch sender: ${BATCH_SENDER_URL}`);
 
   return { startTime: Date.now() };
@@ -73,10 +80,7 @@ export function setup() {
 export default function () {
   const amount = (Math.floor(Math.random() * 10000) + 1) / 100; // R$ 0.01 - R$ 100.00
 
-  const payload = JSON.stringify({
-    amount: amount,
-    version: "1.13",
-  });
+  const payload = JSON.stringify({ amount: amount });
 
   const params = {
     headers: { "Content-Type": "application/json" },
@@ -91,7 +95,7 @@ export default function () {
   pixSent.add(1);
 
   const success = check(res, {
-    "status is 200-299": (r) => r.status >= 200 && r.status < 300,
+    "ICOM stored the message (201)": (r) => r.status === 201,
     "response has status": (r) => {
       try {
         const body = JSON.parse(r.body);

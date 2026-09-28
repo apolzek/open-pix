@@ -12,20 +12,30 @@ Before requesting production access, verify that all homologation phases have be
 
 ### SPI (Sistema de Pagamentos Instantaneos)
 
-- [ ] **SPI Functionality** -- Bacen validates before capacity testing
-  - [ ] Send pacs.008 (credit transfer) and receive pacs.002 (status response)
-  - [ ] Receive pacs.008 and respond with pacs.002 (accept and reject scenarios)
-  - [ ] Send pacs.004 (return/refund) and receive confirmation
-  - [ ] Receive pacs.004 and process return
-  - [ ] Handle message versioning (support multiple pacs versions, e.g., 1.11 and 1.13)
-  - [ ] ICOM polling mechanism working (up to 6 concurrent connections)
+- [ ] **SPI Functionality** -- the tests listed in the Roteiro (Fase 2)
+  - [ ] Connectivity: `pibr.001` → `pibr.002` echo on the primary channel
+  - [ ] Send pacs.008 and receive the SPI's pacs.002 confirming settlement (primary and secondary channels)
+  - [ ] Receive pacs.008 and accept it with pacs.002 (primary and secondary channels)
+  - [ ] Receive pacs.008 and reject it with pacs.002 + reason code before the SPI times out
+  - [ ] Send pacs.004 and receive the SPI's pacs.002 confirming settlement
+  - [ ] Receive pacs.004 and accept it; receive pacs.004 and reject it before the SPI times out
+  - [ ] `camt.060` → `camt.053` (current and previous-day closing balance), `camt.054` (entry details), `camt.052` + ARQ file download (list of entries)
+  - [ ] LPI liquidity transfers via STR/STR-Web (`LPI0001`, `LPI0003`; `LPI0002`/`LPI0004`/`LPI0005`/`LPI0006` when applicable)
+  - [ ] Rediscount via Selic (`SEL1009`/`SEL1016`), or email to spi@bcb.gov.br declining it
+  - [ ] Settlement service for indirect participants (`reda.014`/`reda.031` → `reda.016`), or email declining it
+  - [ ] `reda.022` → `reda.016` (contact data) and handling of `admi.004` (SPI operational notices)
+  - [ ] Block and unblock sending Pix manually in the SPI module of SPB-Web2
+  - [ ] Message versions match what is enabled in the ICOM catalog (`GET /api/v1/in/catalog`; catalog 5.13: pacs.008 1.16, pacs.002 1.17, pacs.004 1.5)
+  - [ ] ICOM stream reading working (`/out/{ispb}/stream/start` + `PI-Pull-Next` + final `DELETE`, up to 6 streams)
   - [ ] Multipart message consumption implemented
   - [ ] TCP connection reuse configured
-- [ ] **SPI Capacity** -- Formal test with Bacen
-  - [ ] Receive 20,000+ pacs.008 messages from Bacen
-  - [ ] Process and respond with pacs.002 within timeout window
-  - [ ] Send 20,000+ pacs.008 messages (2,000/min for 10 minutes)
+- [ ] **SPI Capacity** -- Formal test with Bacen (Roteiro item 7), sending and receiving simultaneously for 10 minutes
+  - [ ] Send 10,000 / 20,000 / 40,000 pacs.008 HIGH to 99999A04 (1,000 / 2,000 / 4,000 per minute, by number of accounts)
+  - [ ] Receive the same volume from 99999A03 and accept all of them with pacs.002
+  - [ ] Consume at least 99% of the messages the SPI makes available within 200 ms
+  - [ ] As receiver, at least 50% of payments within 1.4s and 95% within 2.3s
   - [ ] k6 test infrastructure validated
+- [ ] Complete test documentation kept (the Roteiro requires keeping it for 5 years)
 
 ### DICT (Diretorio de Identificadores)
 
@@ -39,7 +49,7 @@ Before requesting production access, verify that all homologation phases have be
   - [ ] DICT sync/polling mechanism working
   - [ ] Rate limiting implemented (token-bucket per user and operation)
 - [ ] **DICT Capacity** -- Formal test with Bacen
-  - [ ] 1,000+ key lookups executed successfully
+  - [ ] Lookup volume agreed with Bacen executed successfully (the volume is not in the sources used here; in our experience it was in the order of 1,000+ lookups)
 
 ### QR Code
 
@@ -52,7 +62,7 @@ Before requesting production access, verify that all homologation phases have be
 ### Additional Requirements
 
 - [ ] Participant directory processing (camt.014 for new participants)
-- [ ] Account balance inquiry (camt.060 / camt.052)
+- [ ] Account balance and statement inquiries (camt.060 → camt.053 / camt.054 / camt.052)
 - [ ] Settlement and reconciliation logic
 - [ ] Availability index calculation
 - [ ] Indirect participant support (reda.014) if applicable
@@ -68,17 +78,16 @@ Production certificates are **different** from homologation certificates. You mu
 | Item | Homologation | Production |
 |------|-------------|------------|
 | Certificate authority | ICP-Brasil (homologation chain) | ICP-Brasil (production chain) |
-| STA registration | Homologation STA | Production STA |
-| STR registration | Homologation STR | Production STR |
+| Delivery to Bacen | Before the homologation tests | Up to the business day before the start of operations (Roteiro, Fase 3) |
 | Validity | Standard | Standard |
 
 ### Steps
 
 1. **Generate new key pair** for production (do NOT reuse homologation keys)
 2. **Obtain production certificate** from an ICP-Brasil accredited certificate authority
-3. **Register certificate** in the production STA (Sistema de Transferencia de Arquivos)
-4. **Register certificate** in the production STR (Sistema de Transferencia de Reservas)
-5. **Test mTLS connectivity** to production endpoints before go-live date
+3. **Send the certificates to Bacen** (signature CERTPIA and channel CERTPIC) as specified in the Manual de Redes do SFN, the ICOM manual and the Manuais de Segurança do SFN e do Pix. The Roteiro requires this up to the business day before the start of operations; otherwise the start is cancelled and a new date must be informed
+4. **Test connectivity on the production primary channel** (`pibr.001` → `pibr.002`) by the same deadline
+5. **Test mTLS connectivity** to the other production endpoints (secondary channel, DICT, ARQ) before go-live date
 6. **Configure certificate rotation** process for when certificates expire
 
 ### Certificate Management Best Practices
@@ -97,12 +106,14 @@ The production ICOM (Interface de Comunicacao) URL is different from the homolog
 
 | Environment | ICOM URL | Port |
 |-------------|----------|------|
-| Homologation | `icom-h.pi.rsfn.net.br` | 16522 |
-| Production | `icom.pi.rsfn.net.br` | 16522 |
+| Homologation | `icom-h.pi.rsfn.net.br` (secondary: `icom-sec-h.pi.rsfn.net.br`) | 16522 (secondary: 17522) |
+| Production | `icom.pi.rsfn.net.br` (secondary: `icom-sec.pi.rsfn.net.br`) | 16422 (secondary: 17422) |
+
+DICT: `dict-h.pi.rsfn.net.br:16522` (homologation) and `dict.pi.rsfn.net.br:16422` (production), base path `/api/v2/`.
 
 ### Configuration Changes
 
-- Update all endpoint URLs from homologation (`-h`) to production
+- Update all endpoint URLs from homologation (`-h`) to production, including the ports (16522 → 16422, 17522 → 17422)
 - Update DICT API endpoints similarly
 - Verify DNS resolution for production endpoints from your infrastructure
 - Test network connectivity and firewall rules for production endpoints
@@ -110,9 +121,12 @@ The production ICOM (Interface de Comunicacao) URL is different from the homolog
 
 ### ICOM Connection Parameters (Production)
 
-- Maximum concurrent polling connections: 6
-- Maximum message size: as defined in the communication interface manual
-- Connection timeout: configure appropriately (10-15 seconds recommended)
+- Maximum simultaneous read streams per participant and channel: 6 (above that, 429)
+- Up to 10 messages per multipart request or response
+- Rate limit: token bucket (primary channel: 3,750 tokens, refilled at 750/s); 429 + `Retry-After` when exhausted
+- Read timeout: longer than the long-polling wait of the stream (the toolkit uses 30 seconds)
+- gzip (`Content-Encoding`) support is mandatory; recommended on the primary channel and mandatory on the secondary
+- `Host` header without the port
 - Keep-alive: enabled (reuse TCP connections)
 - Do NOT send HTTP headers not defined in the communication interface manual
 
@@ -126,15 +140,16 @@ Your PI (Pagamentos Instantaneos) account in production starts with **zero balan
 
 ### Funding Methods
 
-1. **STR Web**: Use the STR Web interface to transfer funds from your STR account (settlement account) to your PI account
+1. **STR / STR-Web**: Transfer funds from your STR reserve/settlement account (RB/CL) to your PI account with `LPI0001` (institutions that are not STR participants use STR-Web)
 2. **Receive Pix**: Have another participant send Pix payments to your keys, which will credit your PI account
-3. **CCME Transfer**: If you use a CCME (Conta de Compensacao de Moeda Estrangeira), coordinate with your settlement bank
+3. **CCME account**: If you hold a CCME account at Bacen, transfer from it with `LPI0002` (and back with `LPI0004`)
+4. **Automatic transfer**: STR participants and CCME holders can configure automatic transfers with `LPI0005` (confirmed by `LPI0006`)
 
 ### STR Web Process
 
-STR Web is a Bacen-provided web interface for managing your settlement accounts:
+In our experience the PI account is managed through Bacen's web interfaces (STR-Web and the SPI module of SPB-Web, where the Roteiro requires at least two operators registered in Autran, one with the Confirmation profile and one with the Alteration profile):
 
-1. Access STR Web with your institutional credentials
+1. Access the web interface with your institutional credentials
 2. Navigate to PI account management
 3. Initiate transfer from STR to PI account
 4. Confirm the transfer
@@ -170,16 +185,16 @@ Deploy comprehensive monitoring for your Pix infrastructure:
 | Metric | Description | Alert Threshold |
 |--------|-------------|----------------|
 | Transaction rate (TPS) | Pix transactions per second | N/A (baseline) |
-| Latency p50 | Median end-to-end processing time | > 1s |
-| Latency p95 | 95th percentile processing time | > 3s |
-| Latency p99 | 99th percentile processing time | > 5s |
+| Latency p50 | Median time from `AccptncDtTm` to settlement | Internal baseline (for reference, the SPI's own time target is p50 2.8s / p99 4.6s) |
+| Latency p95 | 95th percentile of the same | Internal choice, well below the 40s limit (e.g. > 10s) |
+| Payer PSP time (t1 − t0') | Accept order → pacs.008 sent to SPI | p50 > 0.9s or p95 > 1.5s (Manual de Tempos) |
 | Error rate | Percentage of failed transactions | > 1% |
-| pacs.002 response time | Time to respond to incoming pacs.008 | > 5s (Bacen timeout at 10s) |
-| ICOM polling lag | Delay in consuming messages from ICOM | > 30s |
+| pacs.002 response time | Receiving PSP time (t3' − t2): incoming pacs.008 → pacs.002 | p50 > 1.4s or p95 > 2.3s (Manual de Tempos); the SPI rejects with AB03 if the Pix is not settled within 40s of `AccptncDtTm` |
+| ICOM stream lag | Delay in consuming messages from ICOM | > 200 ms (the capacity test requires 99% consumed within 200 ms) |
 | DICT lookup latency | Time for key lookups | > 2s |
 | PI account balance | Available balance for outgoing Pix | < minimum threshold |
 | Certificate expiry | Days until certificate expires | < 30 days |
-| Availability index | System uptime percentage | < 99.5% |
+| Availability index | Monthly availability (Manual de Tempos 4.3) | Below your category target (A 99.5%, B 99.0%, C 98.5%, D 95.0%) |
 
 ### Grafana Dashboard Recommendations
 
@@ -326,13 +341,15 @@ Pix operates **24 hours a day, 7 days a week, 365 days a year**. Your systems mu
 
 | Metric | Target |
 |--------|--------|
-| Availability | >= 99.5% (per Bacen requirement) |
-| pacs.002 response time | < 10 seconds (Bacen timeout) |
-| Transaction processing | < 5 seconds end-to-end (target) |
+| Availability | Monthly target by category: A 99.5%, B 99.0%, C 98.5%, D 95.0% (new participants with no settled transactions are category D) |
+| Receiving PSP (pacs.008 → pacs.002) | p50 1.4s, p95 2.3s |
+| Payer PSP (acceptance → pacs.008) | p50 0.9s, p95 1.5s |
+| End-to-end limit | 40 seconds from `AccptncDtTm` to settlement; after that the SPI rejects with AB03 |
+| User experience (acceptance → payer notified) | p50 6s, p99 10s |
 | Incident response | P1: < 15 minutes |
 
 **Availability calculation:**
-Bacen measures availability based on your response to incoming pacs.008 messages. If you fail to respond with pacs.002 within the timeout window, those transactions count against your availability.
+Per the Manual de Tempos (4.3), the index is `hours of effective service to end users / hours the service should be open (24x7)`, computed monthly by the participant itself (Bacen may request supporting data). Consider only the transactional service (payments and receipts; in the DICT, only lookups), inside and outside the SPI, on both channels, including failures of your PSTI and settlement agent. Do not count unavailability caused by the SPI, DICT, RSFN or other Bacen infrastructure, by end-user devices, or rejections for lack of liquidity.
 
 > "Como voces estao calculando o indice de disponibilidade?"
 
@@ -347,15 +364,15 @@ Track this metric continuously and alert if it drops below threshold.
 - Monitor PI account balance continuously
 
 **Reconciliation:**
-- Use camt.060 to request account statements (camt.052)
-- Note: camt.060 only returns data for the last 24 hours
+- Use camt.060 to request balances (camt.053), entry details (camt.054) or the list of entries (camt.052, which points to a file on ARQ)
+- Note: files on ARQ are kept for only 24 hours; download them promptly
 - Implement daily reconciliation between your internal ledger and PI account
 - Track every transaction by `endToEndId`
 - Reconcile settlement amounts with expected values
 - Investigate any discrepancies immediately
 
 **Daily reconciliation process:**
-1. Request camt.052 statement via camt.060 for the previous day
+1. Request the list of entries (camt.052) via camt.060 and download the file from ARQ
 2. Compare PI account movements with your internal transaction records
 3. Identify and investigate any discrepancies
 4. Generate reconciliation report
@@ -366,16 +383,15 @@ Track this metric continuously and alert if it drops below threshold.
 As a Direct Participant, you have ongoing reporting obligations:
 
 **Regular reports:**
-- Transaction volume and value reports
-- Availability index reports
-- Incident reports for significant outages
-- Fraud/MED reports
+- Availability index: computed monthly by the participant; Bacen may request the data at any time (Manual de Tempos 4.3)
+- Keep the responsible contacts up to date with `reda.022`
+- Other reports (volumes, incidents, fraud/MED) follow the Pix regulation and were not checked against the sources used here
 
 **Participant directory:**
 - Process camt.014 messages to stay updated on new/changed participants
 - Maintain a local participant directory
-- The initial participant list can be loaded from a CSV published by Bacen
-- camt.014 provides incremental updates for new participants
+- The initial participant list can be loaded from a CSV published by Bacen (practical experience)
+- camt.014 announces new participants (the Roteiro says each new direct participant's registration is communicated to all participants by camt.014)
 
 **Regulatory compliance:**
 - Maintain transaction records for regulatory audits
@@ -418,6 +434,11 @@ This was in homologation -- in production, this must not happen. Design for resi
 ```
 PRE-GO-LIVE
 [  ] All homologation phases passed (SPI, DICT, QR Code)
+[  ] Declaration of aptitude sent (BC Correio or digital protocol, signed by the responsible director)
+[  ] Approval communicated by Deban/Gemon (operations must start within 3 months)
+[  ] Start date/time informed at least 3 business days in advance
+[  ] Production certificates sent and pibr.001 echo tested by the business day before
+[  ] reda.022 sent; two Autran operators registered for the SPB-Web SPI module
 [  ] Production certificates obtained and installed
 [  ] Production ICOM/DICT endpoints configured
 [  ] RSFN production network access verified
@@ -441,3 +462,5 @@ POST-GO-LIVE
 [  ] Gradual customer rollout progressing
 [  ] Bacen reporting configured
 ```
+
+Sources: [Roteiro para Participação Direta no SPI](https://www.bcb.gov.br/content/estabilidadefinanceira/sistemapagamentosinstantaneos_docs/Roteiro_para_Participacao_Direta_no_SPI_e_abertura_de_Conta_PI.pdf), [Manual de Tempos do Pix 7.0](https://www.bcb.gov.br/content/estabilidadefinanceira/pix/Regulamento_Pix/IX_ManualdeTemposdoPix.pdf), [ICOM manual 1.12](https://www.bcb.gov.br/content/estabilidadefinanceira/cedsfn/Manual%20das%20Interfaces%20de%20Comunica%C3%A7%C3%A3o-1.12.pdf), [DICT API](https://www.bcb.gov.br/content/estabilidadefinanceira/pix/API-DICT.html).

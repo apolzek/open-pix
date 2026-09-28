@@ -4,7 +4,7 @@ Before writing a single line of code for Pix homologation, a significant amount 
 
 ## ISPB Registration
 
-Your institution must have a registered **ISPB** (Identificador do Sistema de Pagamentos Brasileiro), the unique 8-digit identifier assigned by Bacen to every participant in the Brazilian payment system. If your institution does not already have an ISPB, this must be obtained through Bacen's institutional registration process before any technical work begins.
+Your institution must have a registered **ISPB** (Identificador do Sistema de Pagamentos Brasileiro), the unique 8-character identifier (`[0-9A-Z]{8}`; usually digits, but letters are valid, as in Bacen's virtual participants `99999A03`/`99999A04`) assigned by Bacen to every participant in the Brazilian payment system. If your institution does not already have an ISPB, this must be obtained through Bacen's institutional registration process before any technical work begins.
 
 The ISPB is embedded in virtually every message and identifier in the Pix protocol: end-to-end IDs, business message IDs, routing headers, and DICT key registrations. It is your institution's identity within the entire payment ecosystem.
 
@@ -14,7 +14,7 @@ All communication with Bacen's systems occurs over mTLS (mutual TLS), requiring 
 
 ### What You Need
 
-- **Client certificate** for RSFN authentication (used for mTLS with ICOM and DICT APIs)
+- **Client certificate** for RSFN authentication (used for mTLS with ICOM and DICT APIs). The Roteiro names two certificates: a signature certificate (**CERTPIA**, for the XMLDSig in `Sgntr`/`Signature`) and a channel encryption certificate (**CERTPIC**, for the TLS connection), specified in the Manual de Redes do SFN, the ICOM manual and the Manuais de Segurança do SFN e do Pix
 - **Separate certificates** for homologation and production environments
 - Certificates must be associated with your institution's CNPJ
 
@@ -46,22 +46,21 @@ openssl rsa -in client-key.pem -out client-key-nopass.pem
 
 ## STA (Sistema de Transferencia de Arquivos)
 
-STA is Bacen's file transfer system used for bulk data exchange. During homologation, STA is used to:
+STA is Bacen's file transfer system used for bulk data exchange. Having a working STA client is useful, but note what the official documents actually use during SPI homologation:
 
-- Receive test plans and test case specifications from Bacen
-- Submit test results and evidence
-- Exchange reconciliation files
-- Receive capacity test reports
+- The Roteiro requires **Sisbacen and BC Correio** access (to send and receive messages with Bacen); formal documents such as the extension request and the declaration of aptitude go through BC Correio or the digital protocol
+- Scheduling of the capacity test and the "Resumo dos Resultados dos Testes Homologatórios no SPI" go through **spi@bcb.gov.br**
+- Statement files requested with `camt.060`/`camt.052` are downloaded from the ICOM **ARQ** service (`https://arq-h.pi.rsfn.net.br:1130` in homologation; files are kept for 24h)
 
-You need STA access credentials and a working STA client. Bacen provides documentation on STA client setup. Ensure your team can send and receive files via STA before beginning Phase 1.
+Ensure your team has Sisbacen/BC Correio access and can reach ARQ before beginning Phase 1.
 
 ## STR (Sistema de Transferencia de Reservas)
 
 STR is Brazil's real-time gross settlement system. For Pix, STR is relevant because:
 
-- Your PI (Pagamentos Instantaneos) account balance is managed through STR
-- Settlement of Pix transactions ultimately flows through STR
-- You need STR access to manage your liquidity position
+- Liquidity moves between your STR reserve/settlement account and your PI (Pagamentos Instantaneos) account through the LPI messages (`LPI0001`, `LPI0003`, ...), tested in Roteiro item 4
+- Pix transactions themselves settle in the PI accounts, inside the SPI, not in STR
+- Institutions that are not STR participants send the LPI messages through STR-Web
 
 While STR integration is not the focus of Pix homologation testing, you need to understand how it interacts with your PI account and ensure your operations team can manage STR transfers.
 
@@ -70,12 +69,12 @@ While STR integration is not the focus of Pix homologation testing, you need to 
 Every Direct Participant must have a **PI account** at Bacen. This is the settlement account used for Pix transactions. Key details:
 
 - The PI account **starts with a zero balance** in the homologation environment
-- In production, you must pre-fund the PI account via STR before you can settle outgoing Pix transactions
+- You must fund the PI account (via STR/STR-Web with `LPI0001`, or by receiving Pix) before you can settle outgoing Pix transactions, in homologation as in production
 - The PI account balance is debited for outgoing payments and credited for incoming payments
-- Bacen performs periodic settlement cycles throughout the day
+- Each Pix settles individually and in real time (gross settlement); there are no settlement cycles
 - You must monitor your PI account balance to avoid settlement failures due to insufficient funds
 
-During homologation, the zero balance in the PI account does not block testing because homologation transactions do not involve real money movement. However, understanding PI account management is critical for go-live readiness.
+In our experience the zero starting balance is a frequent surprise in the first send tests: plan the funding step before the first `pacs.008`. Understanding PI account management is also critical for go-live readiness.
 
 ## Infrastructure Requirements
 
@@ -85,7 +84,7 @@ You need dedicated infrastructure (physical or virtual) that can:
 
 - Maintain persistent connections to the RSFN network
 - Handle the mTLS handshake with ICP-Brasil certificates
-- Support the throughput requirements (2,000+ transactions per minute for capacity testing)
+- Support the throughput requirements (1,000, 2,000 or 4,000 `pacs.008` per minute sent and received for the capacity test, depending on the number of accounts)
 - Run 24/7 with high availability (Pix operates continuously, including weekends and holidays)
 
 ### Network Connectivity to RSFN
@@ -102,10 +101,11 @@ Network setup has significant lead time (4-8 weeks or more). This is often the l
 
 Ensure the following network requirements are met:
 
-- Outbound HTTPS (port 16522) to ICOM endpoints
-- Outbound HTTPS (port 443) to DICT endpoints
+- Outbound HTTPS to ICOM: port 16522 (primary) and 17522 (secondary) in homologation; 16422 and 17422 in production
+- Outbound HTTPS to DICT: port 16522 in homologation (`dict-h.pi.rsfn.net.br`), 16422 in production
+- Outbound HTTPS to ARQ (statement files): port 1130 in homologation
 - mTLS support (client certificate presentation during TLS handshake)
-- Stable, low-latency connectivity (Pix has a 10-second end-to-end timeout)
+- Stable, low-latency connectivity (a Pix must settle within 40 seconds of the payer's acceptance, and the receiving PSP is measured at p50 1.4s / p95 2.3s)
 - No transparent proxies or middleware that modify HTTP headers or TLS behavior
 
 ## Certificate Installation and Validation
@@ -117,7 +117,7 @@ Once you have your ICP-Brasil certificate and RSFN network connectivity, you mus
 1. **Install the certificate** on your application servers in the appropriate format (PEM, PKCS#12, or JKS depending on your technology stack)
 2. **Configure your HTTP client** to present the client certificate during TLS handshake
 3. **Verify the trust chain**: Your client must trust Bacen's server certificate chain, and Bacen's infrastructure must trust your client certificate chain
-4. **Test basic connectivity**: Make a simple HTTPS request to the ICOM health endpoint to confirm mTLS is working
+4. **Test basic connectivity**: ICOM has no health endpoint; a `GET /api/v1/in/catalog` is a simple request to confirm mTLS is working, and the formal test is the `pibr.001` → `pibr.002` echo
 5. **Validate certificate metadata**: Ensure the certificate's CNPJ, serial number, and other fields match what Bacen expects for your institution
 
 ### Common Certificate Issues
@@ -156,8 +156,8 @@ Before connecting to Bacen's homologation environment, set up local development 
 
 ### Local Development
 
-- **Mock ICOM server**: Build or use a mock server that simulates ICOM's polling behavior and responds with test `pacs.002` messages
-- **XML validation**: Set up ISO 20022 XML schema validation in your development pipeline. Bacen provides XSD schemas for all message types
+- **Mock ICOM server**: Build or use a mock server that simulates ICOM's stream reading (`/out/{ispb}/stream/start` + `PI-Pull-Next` + `DELETE`) and responds with test `pacs.002` messages
+- **XML validation**: Set up XML schema validation in your development pipeline. Bacen publishes the XSDs of every SPI message in the catalog zip (copies in `simulator/spec/spi-5.13.1`; `npm run test:simulator` validates the toolkit's messages against them)
 - **Message builders**: Create utilities to generate valid `pacs.008`, `pacs.002`, and `pacs.004` messages with correct structures
 - **Test data**: Prepare test datasets with valid CPFs, CNPJs, account numbers, and Pix keys for the homologation environment
 
@@ -180,10 +180,11 @@ Before connecting to Bacen's homologation environment, set up local development 
 Before starting Phase 1 (Basic Connectivity), confirm all of the following:
 
 - [ ] ISPB registered and active with Bacen
-- [ ] ICP-Brasil digital certificates obtained for the homologation environment
+- [ ] Sisbacen and BC Correio access (required by the Roteiro)
+- [ ] ICP-Brasil digital certificates (CERTPIA and CERTPIC) obtained for the homologation environment
 - [ ] RSFN network connectivity established and validated
-- [ ] STA access configured and tested (can send/receive files)
-- [ ] STR access available (for PI account management understanding)
+- [ ] ARQ reachable (and STA, if your operation uses it)
+- [ ] STR or STR-Web access available (to fund the PI account)
 - [ ] PI account created at Bacen
 - [ ] Certificate installed and mTLS validated against a test endpoint
 - [ ] At least one partner PSP identified and initial contact made
@@ -191,6 +192,8 @@ Before starting Phase 1 (Basic Connectivity), confirm all of the following:
 - [ ] Staging environment deployed and accessible
 - [ ] Team has reviewed Bacen's Pix technical manuals and message specifications
 - [ ] Logging and monitoring infrastructure in place
+
+Sources: [Roteiro para Participação Direta no SPI](https://www.bcb.gov.br/content/estabilidadefinanceira/sistemapagamentosinstantaneos_docs/Roteiro_para_Participacao_Direta_no_SPI_e_abertura_de_Conta_PI.pdf), [ICOM manual 1.12](https://www.bcb.gov.br/content/estabilidadefinanceira/cedsfn/Manual%20das%20Interfaces%20de%20Comunica%C3%A7%C3%A3o-1.12.pdf), [Manual de Tempos do Pix](https://www.bcb.gov.br/content/estabilidadefinanceira/pix/Regulamento_Pix/IX_ManualdeTemposdoPix.pdf), [DICT API](https://www.bcb.gov.br/content/estabilidadefinanceira/pix/API-DICT.html).
 
 ---
 

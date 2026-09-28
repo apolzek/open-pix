@@ -1,19 +1,33 @@
 /**
  * EndToEndId (E2E ID) Generator for Pix transactions.
  *
- * Format: E{ISPB 8 digits}{YYYYMMDD}{HHMM}{random alphanumeric} = 32 chars total
- * Example: E1234567820240115143500000000001A
+ * Format (Catalogo de Mensagens do SPI, pacs.008 <EndToEndId>):
+ *   E + ISPB [0-9A-Z]{8} + yyyyMMddHHmm (UTC) + 11 alphanumeric = 32 chars
+ * Example: E9999901020260928143512345678900
  *
- * The E2E ID uniquely identifies each Pix transaction across the entire SPI network.
- * Must be exactly 32 characters, starting with 'E'.
+ * - The timestamp is in UTC, not Brasilia time. The SPI accepts a tolerance
+ *   of 12 hours to the past or future relative to its processing time.
+ * - The ISPB part accepts uppercase letters (e.g. Bacen's virtual participants
+ *   99999A03 and 99999A04 in homologation).
+ * - The 11-char suffix must be unique within each yyyyMMddHHmm.
+ *
+ * The return identifier of a pacs.004 (<RtrId>) uses the same layout with a
+ * 'D' prefix. It is a separate field; <OrgnlEndToEndId> keeps the original 'E' id.
  */
+
+import crypto from "node:crypto";
 
 const ALPHANUMERIC = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
+export const ISPB_PATTERN = /^[0-9A-Z]{8}$/;
+export const END_TO_END_ID_PATTERN = /^E[0-9A-Z]{8}\d{4}[01]\d[0-3]\d[0-2]\d[0-5]\d[a-zA-Z0-9]{11}$/;
+export const RETURN_ID_PATTERN = /^D[0-9A-Z]{8}\d{4}[01]\d[0-3]\d[0-2]\d[0-5]\d[a-zA-Z0-9]{11}$/;
+
 function randomAlphanumeric(length: number): string {
+  const bytes = crypto.randomBytes(length);
   let result = "";
   for (let i = 0; i < length; i++) {
-    result += ALPHANUMERIC[Math.floor(Math.random() * ALPHANUMERIC.length)];
+    result += ALPHANUMERIC[bytes[i] % ALPHANUMERIC.length];
   }
   return result;
 }
@@ -22,36 +36,42 @@ function padZero(n: number, len: number): string {
   return String(n).padStart(len, "0");
 }
 
-export function generateEndToEndId(ispb: string, date?: Date): string {
-  const d = date || new Date();
-  const ispbPadded = ispb.padStart(8, "0");
-
-  const dateStr =
-    `${d.getFullYear()}` +
-    padZero(d.getMonth() + 1, 2) +
-    padZero(d.getDate(), 2);
-
-  const timeStr = padZero(d.getHours(), 2) + padZero(d.getMinutes(), 2);
-
-  // E (1) + ISPB (8) + date (8) + time (4) = 21 chars, need 11 more random
-  const randomPart = randomAlphanumeric(11);
-
-  const e2eid = `E${ispbPadded}${dateStr}${timeStr}${randomPart}`;
-
-  if (e2eid.length !== 32) {
-    throw new Error(`E2E ID must be 32 chars, got ${e2eid.length}: ${e2eid}`);
+export function assertIspb(ispb: string): string {
+  if (!ISPB_PATTERN.test(ispb)) {
+    throw new Error(`ISPB must match [0-9A-Z]{8}, got "${ispb}"`);
   }
+  return ispb;
+}
 
-  return e2eid;
+/** yyyyMMddHHmm in UTC. */
+export function utcStamp(d: Date = new Date()): string {
+  return (
+    `${d.getUTCFullYear()}` +
+    padZero(d.getUTCMonth() + 1, 2) +
+    padZero(d.getUTCDate(), 2) +
+    padZero(d.getUTCHours(), 2) +
+    padZero(d.getUTCMinutes(), 2)
+  );
+}
+
+function build(prefix: "E" | "D", ispb: string, date?: Date): string {
+  const id = `${prefix}${assertIspb(ispb)}${utcStamp(date)}${randomAlphanumeric(11)}`;
+  if (id.length !== 32) {
+    throw new Error(`Id must be 32 chars, got ${id.length}: ${id}`);
+  }
+  return id;
+}
+
+export function generateEndToEndId(ispb: string, date?: Date): string {
+  return build("E", ispb, date);
 }
 
 /**
- * Generate a devolution E2E ID (starts with 'D' instead of 'E').
- * Used for pacs.004 devolution messages.
+ * Generate a return identifier (<RtrId>) for a pacs.004, prefixed with 'D'.
+ * The ISPB is the one of the participant that sends the return.
  */
 export function generateDevolutionEndToEndId(ispb: string, date?: Date): string {
-  const e2eid = generateEndToEndId(ispb, date);
-  return "D" + e2eid.slice(1);
+  return build("D", ispb, date);
 }
 
 export function parseEndToEndId(e2eid: string): {
@@ -61,8 +81,8 @@ export function parseEndToEndId(e2eid: string): {
   time: string;
   random: string;
 } {
-  if (e2eid.length !== 32) {
-    throw new Error(`E2E ID must be 32 chars, got ${e2eid.length}`);
+  if (!END_TO_END_ID_PATTERN.test(e2eid) && !RETURN_ID_PATTERN.test(e2eid)) {
+    throw new Error(`Invalid EndToEndId/RtrId: ${e2eid}`);
   }
 
   return {
@@ -79,16 +99,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const ispb = process.argv[2] || "12345678";
   const count = parseInt(process.argv[3] || "5", 10);
 
-  console.log(`=== E2E ID Generator (ISPB: ${ispb}) ===\n`);
+  console.log(`=== E2E ID Generator (ISPB: ${ispb}, UTC) ===\n`);
 
   console.log("Payment E2E IDs:");
   for (let i = 0; i < count; i++) {
     const id = generateEndToEndId(ispb);
     const parsed = parseEndToEndId(id);
-    console.log(`  ${id} (ISPB: ${parsed.ispb}, date: ${parsed.date}, time: ${parsed.time})`);
+    console.log(`  ${id} (ISPB: ${parsed.ispb}, date: ${parsed.date}, time: ${parsed.time} UTC)`);
   }
 
-  console.log("\nDevolution E2E IDs:");
+  console.log("\nReturn ids (pacs.004 RtrId):");
   for (let i = 0; i < count; i++) {
     const id = generateDevolutionEndToEndId(ispb);
     console.log(`  ${id}`);

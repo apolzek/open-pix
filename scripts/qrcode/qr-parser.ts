@@ -1,36 +1,22 @@
 /**
  * Pix QR Code Parser / Debugger.
  *
- * Parses EMV QR code payloads (BR Code) and displays all TLV fields.
- * Useful for debugging QR codes that fail validation during homologation.
+ * Parses BR Code payloads (Manual de Padroes para Iniciacao do Pix 2.10.0)
+ * and displays all TLV fields. Useful for debugging QR codes that fail
+ * validation during homologation.
  *
- * Features:
- * - Decodes all TLV fields with human-readable labels
- * - Validates CRC-16 checksum
- * - Identifies Pix-specific fields (key, URL, txId)
- * - Flags common issues
+ * - Validates the CRC16 (ID 63).
+ * - Finds the Pix template among IDs 26..51 by its GUI br.gov.bcb.pix.
+ * - Static QR: has the Pix key (template 01). Dynamic QR: has the payload
+ *   URL (template 25). ID 01 = "12" only means "do not pay twice".
+ * - Flags rule violations: txid charset/size, template over 99 chars,
+ *   https:// in the URL, missing mandatory fields.
  *
  * Usage:
  *   npx tsx scripts/qrcode/qr-parser.ts "<payload>"
  */
 
-// CRC-16/CCITT-FALSE
-const CRC_TABLE = new Uint16Array(256);
-for (let i = 0; i < 256; i++) {
-  let crc = i << 8;
-  for (let j = 0; j < 8; j++) {
-    crc = (crc << 1) ^ (crc & 0x8000 ? 0x1021 : 0);
-  }
-  CRC_TABLE[i] = crc & 0xffff;
-}
-
-function crc16(data: string): string {
-  let crc = 0xffff;
-  for (let i = 0; i < data.length; i++) {
-    crc = ((crc << 8) & 0xffff) ^ CRC_TABLE[((crc >> 8) ^ data.charCodeAt(i)) & 0xff];
-  }
-  return crc.toString(16).toUpperCase().padStart(4, "0");
-}
+import { crc16, parseTlv, findPixTemplate, type TlvField as EmvField } from "./emv.js";
 
 interface TlvField {
   tag: string;
@@ -43,8 +29,6 @@ interface TlvField {
 const TAG_LABELS: Record<string, string> = {
   "00": "Payload Format Indicator",
   "01": "Point of Initiation Method",
-  "26": "Merchant Account Information (Pix)",
-  "27": "Merchant Account Information (Alt)",
   "52": "Merchant Category Code",
   "53": "Transaction Currency",
   "54": "Transaction Amount",
@@ -54,73 +38,50 @@ const TAG_LABELS: Record<string, string> = {
   "61": "Postal Code",
   "62": "Additional Data Field",
   "63": "CRC16",
-  "80": "Unreserved Templates",
 };
 
 const MAI_LABELS: Record<string, string> = {
-  "00": "GUI (Global Unique Identifier)",
+  "00": "GUI (Globally Unique Identifier)",
   "01": "Pix Key",
-  "02": "Description",
-  "03": "FSS (Optional)",
+  "02": "infoAdicional",
+  "03": "fss (withdrawal facilitator ISPB)",
   "25": "URL (Dynamic QR)",
 };
 
 const ADF_LABELS: Record<string, string> = {
-  "05": "Reference Label (txId)",
-  "50": "Payment Setup (Pix)",
+  "05": "Reference Label (txid)",
 };
 
-function parseTlv(data: string): TlvField[] {
-  const fields: TlvField[] = [];
-  let pos = 0;
-
-  while (pos < data.length) {
-    if (pos + 4 > data.length) break;
-
-    const tag = data.substring(pos, pos + 2);
-    const length = parseInt(data.substring(pos + 2, pos + 4), 10);
-    const value = data.substring(pos + 4, pos + 4 + length);
-
-    const label = TAG_LABELS[tag] || `Unknown (${tag})`;
-
-    const field: TlvField = { tag, length, value, label };
-
-    // Parse nested TLV for known compound fields
-    if (tag === "26" || tag === "27") {
-      field.children = parseTlvWithLabels(value, MAI_LABELS);
-    } else if (tag === "62") {
-      field.children = parseTlvWithLabels(value, ADF_LABELS);
+function label(field: EmvField, pixTemplateId?: string): TlvField {
+  const n = Number(field.id);
+  const isTemplate = (n >= 26 && n <= 51) || (n >= 80 && n <= 99) || field.id === "62";
+  const base: TlvField = {
+    tag: field.id,
+    length: field.length,
+    value: field.value,
+    label:
+      field.id === pixTemplateId
+        ? "Merchant Account Information (Pix)"
+        : n >= 26 && n <= 51
+          ? "Merchant Account Information"
+          : n >= 80 && n <= 99
+            ? "Unreserved Template"
+            : TAG_LABELS[field.id] ?? `Unknown (${field.id})`,
+  };
+  if (isTemplate) {
+    const labels = field.id === "62" ? ADF_LABELS : MAI_LABELS;
+    try {
+      base.children = parseTlv(field.value).map((c) => ({
+        tag: c.id,
+        length: c.length,
+        value: c.value,
+        label: labels[c.id] ?? `Field ${c.id}`,
+      }));
+    } catch {
+      // Leave the raw value; the issue list reports the template.
     }
-
-    fields.push(field);
-    pos += 4 + length;
   }
-
-  return fields;
-}
-
-function parseTlvWithLabels(data: string, labels: Record<string, string>): TlvField[] {
-  const fields: TlvField[] = [];
-  let pos = 0;
-
-  while (pos < data.length) {
-    if (pos + 4 > data.length) break;
-
-    const tag = data.substring(pos, pos + 2);
-    const length = parseInt(data.substring(pos + 2, pos + 4), 10);
-    const value = data.substring(pos + 4, pos + 4 + length);
-
-    fields.push({
-      tag,
-      length,
-      value,
-      label: labels[tag] || `Field ${tag}`,
-    });
-
-    pos += 4 + length;
-  }
-
-  return fields;
+  return base;
 }
 
 export function parseQrPayload(payload: string): {
@@ -130,6 +91,7 @@ export function parseQrPayload(payload: string): {
   crcActual: string;
   isStatic: boolean;
   isDynamic: boolean;
+  singleUse: boolean;
   pixKey?: string;
   pixUrl?: string;
   amount?: string;
@@ -138,71 +100,84 @@ export function parseQrPayload(payload: string): {
   merchantCity?: string;
   issues: string[];
 } {
-  const fields = parseTlv(payload);
   const issues: string[] = [];
 
-  // Validate CRC
-  const crcField = fields.find((f) => f.tag === "63");
-  const crcActual = crcField ? crcField.value : "NONE";
-  const payloadWithoutCrc = payload.substring(0, payload.length - 4);
-  const crcExpected = crc16(payloadWithoutCrc);
-  const crcValid = crcActual === crcExpected;
-
-  if (!crcValid) {
-    issues.push(`CRC mismatch: expected ${crcExpected}, got ${crcActual}`);
+  let raw: EmvField[];
+  try {
+    raw = parseTlv(payload);
+  } catch (err) {
+    raw = [];
+    issues.push((err as Error).message);
   }
 
-  // Extract key info
-  const initiationMethod = fields.find((f) => f.tag === "01")?.value;
-  const isStatic = initiationMethod === "11";
-  const isDynamic = initiationMethod === "12";
+  const pix = findPixTemplate(raw);
+  const fields = raw.map((f) => label(f, pix?.id));
+  const get = (id: string) => raw.find((f) => f.id === id)?.value;
 
-  const maiField = fields.find((f) => f.tag === "26");
+  // CRC covers everything up to and including "6304".
+  const crcActual = get("63") ?? "NONE";
+  const crcExpected = payload.length >= 4 ? crc16(payload.slice(0, -4)) : "NONE";
+  const crcValid = crcActual === crcExpected && payload.slice(-8, -4) === "6304";
+  if (!crcValid) issues.push(`CRC mismatch: expected ${crcExpected}, got ${crcActual}`);
+  if (raw.length && raw[raw.length - 1].id !== "63") issues.push("CRC (ID 63) must be the last field");
+
+  if (raw[0]?.id !== "00" || raw[0]?.value !== "01") {
+    issues.push("Payload Format Indicator (ID 00 = 01) must be the first field");
+  }
+
+  const singleUse = get("01") === "12";
+  if (get("01") !== undefined && get("01") !== "11" && get("01") !== "12") {
+    issues.push(`Invalid Point of Initiation Method: ${get("01")}`);
+  }
+
   let pixKey: string | undefined;
   let pixUrl: string | undefined;
-
-  if (maiField?.children) {
-    pixKey = maiField.children.find((c) => c.tag === "01")?.value;
-    pixUrl = maiField.children.find((c) => c.tag === "25")?.value;
-    const gui = maiField.children.find((c) => c.tag === "00")?.value;
-    if (gui !== "br.gov.bcb.pix") {
-      issues.push(`Invalid GUI: expected "br.gov.bcb.pix", got "${gui}"`);
-    }
+  if (!pix) {
+    issues.push('No Merchant Account Information (IDs 26..51) with GUI "br.gov.bcb.pix"');
+  } else {
+    const sub = parseTlv(pix.value);
+    pixKey = sub.find((c) => c.id === "01")?.value;
+    pixUrl = sub.find((c) => c.id === "25")?.value;
+    if (pix.length > 99) issues.push("Pix template exceeds 99 chars");
+    if (pixKey && pixUrl) issues.push("Pix template has both key (01) and URL (25)");
+    if (!pixKey && !pixUrl) issues.push("Pix template has neither key (01) nor URL (25)");
+    if (pixUrl && /^https?:\/\//i.test(pixUrl)) issues.push('URL (25) must not include "https://"');
   }
 
-  const amount = fields.find((f) => f.tag === "54")?.value;
-  const merchantName = fields.find((f) => f.tag === "59")?.value;
-  const merchantCity = fields.find((f) => f.tag === "60")?.value;
-
-  const adfField = fields.find((f) => f.tag === "62");
-  const txId = adfField?.children?.find((c) => c.tag === "05")?.value;
-
-  // Validation checks
-  const formatIndicator = fields.find((f) => f.tag === "00");
-  if (!formatIndicator || formatIndicator.value !== "01") {
-    issues.push("Missing or invalid Payload Format Indicator (tag 00)");
+  const amount = get("54");
+  if (amount !== undefined && !/^\d{1,10}\.\d{2}$/.test(amount)) {
+    issues.push(`Amount (54) must use dot and two decimals, got "${amount}"`);
   }
 
-  const currency = fields.find((f) => f.tag === "53");
-  if (!currency || currency.value !== "986") {
-    issues.push(`Invalid currency: expected "986" (BRL), got "${currency?.value}"`);
+  const txId = parseTlv(get("62") ?? "").find((c) => c.id === "05")?.value;
+  if (txId === undefined) {
+    issues.push('Missing txid (62-05); use "***" when there is none');
+  } else if (txId !== "***" && !/^[a-zA-Z0-9]{1,25}$/.test(txId)) {
+    issues.push(`txid must have up to 25 chars [a-zA-Z0-9], got "${txId}"`);
+  }
+  if (pixUrl && txId !== undefined && txId !== "***") {
+    issues.push("Dynamic QR: txid comes from the URL payload; 62-05 is ignored by the payer");
   }
 
-  const country = fields.find((f) => f.tag === "58");
-  if (!country || country.value !== "BR") {
-    issues.push(`Invalid country: expected "BR", got "${country?.value}"`);
-  }
+  if (get("52") === undefined) issues.push("Missing Merchant Category Code (ID 52)");
+  if (get("53") !== "986") issues.push(`Invalid currency: expected "986" (BRL), got "${get("53")}"`);
+  if (get("58") !== "BR") issues.push(`Invalid country: expected "BR", got "${get("58")}"`);
 
-  if (!merchantName) issues.push("Missing Merchant Name (tag 59)");
-  if (!merchantCity) issues.push("Missing Merchant City (tag 60)");
+  const merchantName = get("59");
+  const merchantCity = get("60");
+  if (!merchantName) issues.push("Missing Merchant Name (ID 59)");
+  else if (merchantName.length > 25) issues.push("Merchant Name (59) exceeds 25 chars");
+  if (!merchantCity) issues.push("Missing Merchant City (ID 60)");
+  else if (merchantCity.length > 15) issues.push("Merchant City (60) exceeds 15 chars");
 
   return {
     fields,
     crcValid,
     crcExpected,
     crcActual,
-    isStatic,
-    isDynamic,
+    isStatic: pixKey !== undefined,
+    isDynamic: pixUrl !== undefined,
+    singleUse,
     pixKey,
     pixUrl,
     amount,
@@ -247,7 +222,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
 
   console.log("\n--- Summary ---\n");
-  console.log(`Type:          ${result.isStatic ? "Static" : result.isDynamic ? "Dynamic" : "Unknown"}`);
+  console.log(`Type:          ${result.isStatic ? "Static" : result.isDynamic ? "Dynamic" : "Unknown"}${result.singleUse ? " (single use)" : ""}`);
   console.log(`CRC Valid:     ${result.crcValid ? "YES" : "NO"} (expected: ${result.crcExpected}, got: ${result.crcActual})`);
   if (result.pixKey) console.log(`Pix Key:       ${result.pixKey}`);
   if (result.pixUrl) console.log(`Pix URL:       ${result.pixUrl}`);

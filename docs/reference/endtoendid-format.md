@@ -1,6 +1,6 @@
 # EndToEndId Format Reference
 
-The EndToEndId (End-to-End Identification, also abbreviated E2E ID) is a 32-character identifier that uniquely tracks a Pix transaction from origination through settlement. It is present in pacs.008 (payment), pacs.002 (status report), and pacs.004 (return) messages.
+The EndToEndId (End-to-End Identification, also abbreviated E2E ID, `idFimAFim` in the catalog) is a 32-character identifier that uniquely tracks a Pix transaction from origination through settlement. It is set in pacs.008 (`PmtId/EndToEndId`) and referenced in pacs.002 (`OrgnlEndToEndId`) and pacs.004 (`OrgnlEndToEndId`). Returns have their own identifier with the same layout, the `RtrId` (`idOperacao`), prefixed with `D`.
 
 ---
 
@@ -9,44 +9,46 @@ The EndToEndId (End-to-End Identification, also abbreviated E2E ID) is a 32-char
 ### Origination (Pix Payment)
 
 ```
-E{ISPB}{YYYYMMDD}{HHMM}{RANDOM}
+E{ISPB}{yyyyMMdd}{HHmm}{SUFFIX}
 ```
 
 | Segment | Length | Description |
 |---------|--------|-------------|
-| Prefix | 1 | Always `E` for originations |
-| ISPB | 8 | 8-digit ISPB of the originating PSP |
-| Date | 8 | Date in `YYYYMMDD` format |
-| Time | 4 | Time in `HHMM` format (24-hour, BRT timezone) |
-| Random | 11 | Random alphanumeric characters |
-| **Total** | **32** | |
+| Prefix | 1 | Always `E` for payments |
+| ISPB | 8 | Identifier of the agent that generated the id, `[0-9A-Z]{8}`: the ISPB of the direct participant, the ISPB of the indirect participant, or the first 8 digits of the payment initiator's CNPJ |
+| Date | 8 | Date in `yyyyMMdd` format, **UTC** |
+| Time | 4 | Time in `HHmm` format (24-hour), **UTC** |
+| Suffix | 11 | Alphanumeric `[a-zA-Z0-9]`, unique within each `yyyyMMddHHmm` |
+| **Total** | **32** | Case sensitive |
 
-**Example:**
+**Example** (a payment created at 14:35 UTC on 2026-09-28, i.e. 11:35 in Brasília):
 ```
-E12345678202502151030a1B2c3D4e5F
+E12345678202609281435abcDEF12345
 |--------|--------|----|---------|
- ISPB      Date   Time  Random
+ ISPB      Date   Time  Suffix
 ```
 
-### Devolution (Pix Return)
+### Return (pacs.004 RtrId)
 
 ```
-D{ISPB}{YYYYMMDD}{HHMM}{RANDOM}
+D{ISPB}{yyyyMMdd}{HHmm}{SUFFIX}
 ```
 
 | Segment | Length | Description |
 |---------|--------|-------------|
-| Prefix | 1 | Always `D` for devolutions (returns) |
-| ISPB | 8 | 8-digit ISPB of the PSP initiating the return |
-| Date | 8 | Date in `YYYYMMDD` format |
-| Time | 4 | Time in `HHMM` format (24-hour, BRT timezone) |
-| Random | 11 | Random alphanumeric characters |
+| Prefix | 1 | Always `D` for returns |
+| ISPB | 8 | ISPB of the PSP sending the return, `[0-9A-Z]{8}` |
+| Date | 8 | Date in `yyyyMMdd` format, **UTC** |
+| Time | 4 | Time in `HHmm` format (24-hour), **UTC** |
+| Suffix | 11 | Alphanumeric `[a-zA-Z0-9]` |
 | **Total** | **32** | |
 
 **Example:**
 ```
-D12345678202502151045xYz7890AbCdE
+D12345678202609281500abcDEF12345
 ```
+
+The `RtrId` is a separate field. The pacs.004 keeps the original payment id, with its `E` prefix, in `OrgnlEndToEndId`.
 
 ---
 
@@ -54,30 +56,30 @@ D12345678202502151045xYz7890AbCdE
 
 | Position | Allowed Characters |
 |----------|--------------------|
-| Prefix (position 1) | `E` (origination) or `D` (devolution) |
-| ISPB (positions 2-9) | Digits `0-9` only |
-| Date (positions 10-17) | Digits `0-9` only, valid date |
-| Time (positions 18-21) | Digits `0-9` only, valid time (00-23 for hours, 00-59 for minutes) |
-| Random (positions 22-32) | Alphanumeric: `A-Z`, `a-z`, `0-9` |
+| Prefix (position 1) | `E` (payment) or `D` (return) |
+| ISPB (positions 2-9) | `0-9` and uppercase `A-Z` (e.g. Bacen's virtual participants `99999A03` and `99999A04` in homologation) |
+| Date (positions 10-17) | Digits `0-9`, valid date |
+| Time (positions 18-21) | Digits `0-9`, valid time (00-23 for hours, 00-59 for minutes) |
+| Suffix (positions 22-32) | Alphanumeric: `A-Z`, `a-z`, `0-9` |
 
-**Not allowed in the random segment:**
+**Not allowed in the suffix:**
 - Special characters (`-`, `_`, `.`, `/`, etc.)
 - Whitespace
 - Unicode or accented characters
 
 ---
 
-## Uniqueness Requirements
+## Uniqueness and Time Requirements
 
-1. **Global Uniqueness:** Each EndToEndId must be globally unique across the entire SPI. No two transactions (from any PSP) should share the same EndToEndId.
+1. **Uniqueness:** An EndToEndId must be unique and cannot be repeated in any other operation sent to the SPI. The 11-character suffix must be unique within each `yyyyMMddHHmm` of the generating agent.
 
-2. **ISPB Binding:** The ISPB segment must match the originating institution's ISPB. Bacen validates this -- you cannot use another institution's ISPB.
+2. **ISPB Binding:** The ISPB segment identifies whoever generated the id (direct participant, indirect participant or payment initiator). Do not use the counterparty's ISPB.
 
-3. **Date/Time Accuracy:** The date and time segments should reflect the actual creation time of the transaction. While Bacen does not enforce strict time matching, significant discrepancies may trigger validation warnings.
+3. **UTC timestamp:** The date and time segments are in UTC, not Brasília time. They are the time the payment order is submitted (priority payments) or the planned time of sending to the SPI (scheduled payments). A pacs.008 generated from a pain.013 (Pix Automático) reuses the pain.013 EndToEndId. The SPI accepts a tolerance of **12 hours** to the past or future relative to its processing time; ids outside that window are rejected.
 
-4. **Random Segment Entropy:** The 11-character random segment provides the uniqueness guarantee. With 62 possible characters per position (a-z, A-Z, 0-9), the random space is 62^11 (approximately 5.2 x 10^19), which is sufficient for collision avoidance.
+4. **Suffix Entropy:** With 62 possible characters per position (a-z, A-Z, 0-9), the suffix space is 62^11 (approximately 5.2 x 10^19) per minute, which is enough when generated randomly with a CSPRNG.
 
-5. **No Reuse:** An EndToEndId must never be reused, even for retries. If a transaction fails and needs to be retried, generate a new EndToEndId.
+5. **No Reuse (practical rule):** Never reuse an EndToEndId for a new payment. A resend of the *same* message (for example after a 5xx from ICOM) keeps the same ids, since the SPI applies idempotency over a 24-hour window; a *new* attempt after a rejection is a new payment and needs a new EndToEndId.
 
 ---
 
@@ -86,55 +88,66 @@ D12345678202502151045xYz7890AbCdE
 ### Pseudocode
 
 ```
-function generateEndToEndId(ispb, isDevolution = false):
-    prefix = isDevolution ? "D" : "E"
-    date = formatDate(now(), "YYYYMMDD")    // BRT timezone
-    time = formatDate(now(), "HHMM")        // BRT timezone
-    random = generateAlphanumeric(11)
+function generateEndToEndId(ispb, isReturn = false):
+    prefix = isReturn ? "D" : "E"
+    stamp  = formatUtc(now(), "yyyyMMddHHmm")   // UTC
+    suffix = randomAlphanumeric(11)
 
-    endToEndId = prefix + ispb + date + time + random
-
-    assert length(endToEndId) == 32
-    return endToEndId
+    id = prefix + ispb + stamp + suffix
+    assert length(id) == 32
+    return id
 ```
 
-### Node.js Implementation
+### Toolkit (TypeScript)
+
+`scripts/utils/endtoendid-generator.ts` implements this:
+
+```ts
+import {
+  generateEndToEndId,
+  generateDevolutionEndToEndId,
+  parseEndToEndId,
+  END_TO_END_ID_PATTERN,
+} from "./scripts/utils/endtoendid-generator.js";
+
+const e2eId = generateEndToEndId("12345678");            // E12345678 + UTC yyyyMMddHHmm + 11
+const rtrId = generateDevolutionEndToEndId("12345678");  // D... for a pacs.004 RtrId
+parseEndToEndId(e2eId); // { prefix, ispb, date, time, random }
+```
+
+From the command line: `npm run generate:e2eid -- 12345678 5`.
+
+### Plain Node.js Implementation
 
 ```js
 const crypto = require('crypto');
 
-function generateEndToEndId(ispb, isDevolution = false) {
-  const prefix = isDevolution ? 'D' : 'E';
+function generateEndToEndId(ispb, isReturn = false) {
+  if (!/^[0-9A-Z]{8}$/.test(ispb)) throw new Error(`Invalid ISPB: ${ispb}`);
+  const prefix = isReturn ? 'D' : 'E';
 
-  // Use BRT (UTC-3) timezone
+  // UTC, not Brasília time
   const now = new Date();
-  const brt = new Date(now.getTime() - 3 * 60 * 60 * 1000);
-
-  const year = brt.getUTCFullYear().toString();
-  const month = (brt.getUTCMonth() + 1).toString().padStart(2, '0');
-  const day = brt.getUTCDate().toString().padStart(2, '0');
-  const hours = brt.getUTCHours().toString().padStart(2, '0');
-  const minutes = brt.getUTCMinutes().toString().padStart(2, '0');
-
-  const date = `${year}${month}${day}`;
-  const time = `${hours}${minutes}`;
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp =
+    now.getUTCFullYear() +
+    pad(now.getUTCMonth() + 1) +
+    pad(now.getUTCDate()) +
+    pad(now.getUTCHours()) +
+    pad(now.getUTCMinutes());
 
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let random = '';
+  let suffix = '';
   const bytes = crypto.randomBytes(11);
   for (let i = 0; i < 11; i++) {
-    random += chars[bytes[i] % chars.length];
+    suffix += chars[bytes[i] % chars.length];
   }
 
-  const endToEndId = `${prefix}${ispb}${date}${time}${random}`;
-
-  if (endToEndId.length !== 32) {
-    throw new Error(
-      `EndToEndId must be 32 chars, got ${endToEndId.length}: ${endToEndId}`
-    );
+  const id = `${prefix}${ispb}${stamp}${suffix}`;
+  if (id.length !== 32) {
+    throw new Error(`EndToEndId must be 32 chars, got ${id.length}: ${id}`);
   }
-
-  return endToEndId;
+  return id;
 }
 ```
 
@@ -144,29 +157,32 @@ function generateEndToEndId(ispb, isDevolution = false) {
 
 ### Regex Patterns
 
-**Origination:**
+These match the XSD patterns of the SPI catalog (`EndToEndIdType` in pacs.008 and the return id in pacs.004).
+
+**Payment (EndToEndId):**
 ```regex
-^E\d{8}\d{8}\d{4}[A-Za-z0-9]{11}$
+^E[0-9A-Z]{8}[0-9]{4}[0-1][0-9][0-3][0-9][0-2][0-9][0-5][0-9][a-zA-Z0-9]{11}$
 ```
 
-**Devolution:**
+**Return (RtrId):**
 ```regex
-^D\d{8}\d{8}\d{4}[A-Za-z0-9]{11}$
+^D[0-9A-Z]{8}[0-9]{4}[0-1][0-9][0-3][0-9][0-2][0-9][0-5][0-9][a-zA-Z0-9]{11}$
 ```
 
-**Either (origination or devolution):**
+**Either:**
 ```regex
-^[ED]\d{8}\d{8}\d{4}[A-Za-z0-9]{11}$
+^[ED][0-9A-Z]{8}[0-9]{4}[0-1][0-9][0-3][0-9][0-2][0-9][0-5][0-9][a-zA-Z0-9]{11}$
 ```
 
 ### Validation Checks
 
 1. Total length is exactly 32 characters.
 2. First character is `E` or `D`.
-3. Characters 2-9 are digits and match a valid ISPB.
-4. Characters 10-17 are digits forming a valid date (YYYYMMDD).
-5. Characters 18-21 are digits forming a valid time (HHMM, 00-23 hours, 00-59 minutes).
-6. Characters 22-32 are alphanumeric (A-Z, a-z, 0-9).
+3. Characters 2-9 match `[0-9A-Z]{8}` and identify the generating agent.
+4. Characters 10-17 form a valid date (`yyyyMMdd`, UTC).
+5. Characters 18-21 form a valid time (`HHmm`, UTC).
+6. The timestamp is within 12 hours of the current time.
+7. Characters 22-32 are alphanumeric (A-Z, a-z, 0-9).
 
 ---
 
@@ -174,34 +190,34 @@ function generateEndToEndId(ispb, isDevolution = false) {
 
 ### pacs.008 (Payment)
 
-The EndToEndId is set in the payment identification block:
-
 ```xml
 <PmtId>
-  <EndToEndId>E12345678202502151030a1B2c3D4e5F</EndToEndId>
-  <TxId>TXN-2025-001</TxId>
+  <EndToEndId>E12345678202609281435abcDEF12345</EndToEndId>
 </PmtId>
 ```
 
+`TxId` is a different field (the receiver's reconciliation id from a QR code or payment initiation) and is only present for some local instruments. See [ISO Message Reference](iso-messages.md#pacs008----fitoficustomercredittransfer).
+
 ### pacs.002 (Status Report)
 
-The original EndToEndId is referenced to link the status report to the payment:
+The original id is referenced in both `OrgnlInstrId` and `OrgnlEndToEndId`:
 
 ```xml
 <TxInfAndSts>
-  <OrgnlEndToEndId>E12345678202502151030a1B2c3D4e5F</OrgnlEndToEndId>
+  <OrgnlInstrId>E12345678202609281435abcDEF12345</OrgnlInstrId>
+  <OrgnlEndToEndId>E12345678202609281435abcDEF12345</OrgnlEndToEndId>
   <TxSts>ACSP</TxSts>
 </TxInfAndSts>
 ```
 
-### pacs.004 (Return)
+For a pacs.002 about a return, `OrgnlInstrId` carries the `RtrId` (`D...`) of the pacs.004.
 
-The return references the original EndToEndId and uses a devolution ID:
+### pacs.004 (Return)
 
 ```xml
 <TxInf>
-  <RtrId>D12345678202502151045xYz7890AbCdE</RtrId>
-  <OrgnlEndToEndId>E12345678202502151030a1B2c3D4e5F</OrgnlEndToEndId>
+  <RtrId>D12345678202609281500abcDEF12345</RtrId>
+  <OrgnlEndToEndId>E99999A03202609281435abcDEF12345</OrgnlEndToEndId>
 </TxInf>
 ```
 
@@ -211,9 +227,16 @@ The return references the original EndToEndId and uses a devolution ID:
 
 | Mistake | Consequence | Fix |
 |---------|-------------|-----|
-| Wrong length (not 32 chars) | Schema validation failure | Verify length after generation |
-| Using counterpart's ISPB instead of own | Bacen rejects the message | Always use your institution's ISPB |
-| Special characters in random segment | Schema validation failure | Use only `[A-Za-z0-9]` |
-| Reusing an EndToEndId | Duplicate detection, message rejected | Generate a fresh ID for every transaction |
-| Wrong prefix for devolution | Message type mismatch | Use `D` for pacs.004, `E` for pacs.008 |
-| Date/time in UTC instead of BRT | Minor discrepancy, may trigger warnings | Always use BRT (UTC-3) |
+| Wrong length (not 32 chars) | Schema validation failure (admi.002) | Verify length after generation |
+| Using counterpart's ISPB instead of your own | Rejection | Use the ISPB of whoever generated the id |
+| Special characters in the suffix | Schema validation failure | Use only `[A-Za-z0-9]` |
+| Validating the ISPB as 8 digits (`\d{8}`) | Valid ids from ISPBs with letters (e.g. `99999A04`) are refused by your own code | Use `[0-9A-Z]{8}` |
+| Reusing an EndToEndId for a new payment | Duplicate detection, rejection | Generate a fresh id for every new transaction |
+| Using the `E` id as `RtrId`, or putting the `D` id in `OrgnlEndToEndId` | Schema or business rejection | `RtrId` = new `D` id; `OrgnlEndToEndId` = original `E` id |
+| Date/time in Brasília time (UTC-3) instead of UTC | Ids 3 hours off and not compliant with the catalog rule | Always use UTC |
+
+---
+
+## Sources
+
+- Catálogo de Mensagens e Serviços do SPI 5.13 (pacs.008 `EndToEndId` and pacs.004 `RtrId` rules and XSD patterns): https://www.bcb.gov.br/content/estabilidadefinanceira/cedsfn/Catalogos/spi.5.13.1.zip (local copy in `simulator/spec/spi-5.13.1/`)

@@ -1,179 +1,323 @@
 /**
- * DICT Claims Helper - Portability and Ownership Flows.
+ * DICT Claims Helper - portability and ownership claims.
  *
- * Manages Pix key claim processes:
- * - PORTABILITY: Move a key from one PSP to another (same owner)
- * - OWNERSHIP: Transfer key ownership to a different person
+ * DICT API v2.12.1 (simulator/spec/dict-2.12.1/openapi.json, tag Claim):
+ *   createClaim       POST /claims/                        <CreateClaimRequest>       201
+ *   getClaim          GET  /claims/{ClaimId}                                          200
+ *   acknowledgeClaim  POST /claims/{ClaimId}/acknowledge   <AcknowledgeClaimRequest>  200
+ *   confirmClaim      POST /claims/{ClaimId}/confirm       <ConfirmClaimRequest>      200
+ *   cancelClaim       POST /claims/{ClaimId}/cancel        <CancelClaimRequest>       200
+ *   completeClaim     POST /claims/{ClaimId}/complete      <CompleteClaimRequest>     200
  *
- * IMPORTANT (Resolution 457/2025):
- * Ownership claims only work for PHONE keys. EMAIL ownership claims
- * are NOT supported due to regulatory restrictions. This was discovered
- * during real homologation — Bacen does not document this well.
+ * Claim types:
+ *   - PORTABILITY: the same owner moves the key to an account at another PSP.
+ *   - OWNERSHIP:   a new owner claims a key registered to someone else
+ *                  (donor and claimer PSP may be the same).
+ * Key type compatibility (createClaim table in the spec):
+ *   OWNERSHIP   -> PHONE only
+ *   PORTABILITY -> CPF, CNPJ, PHONE, EMAIL
+ *   EVP         -> cannot be claimed or ported
  *
- * Claim lifecycle:
- * 1. Claimer creates claim (CreateClaim)
- * 2. Donor receives notification
- * 3. Donor confirms or cancels (ConfirmClaim / CancelClaim)
- * 4. If donor doesn't respond within 7 days, claim auto-completes
+ * Status: OPEN -> WAITING_RESOLUTION -> CONFIRMED -> COMPLETED, or CANCELLED.
+ * Lifecycle:
+ *   1. Claimer PSP creates the claim (OPEN).
+ *   2. Donor PSP finds it by polling listClaims and acknowledges (WAITING_RESOLUTION).
+ *   3. Donor confirms (CONFIRMED; the donor's entry is removed) or the claim is cancelled.
+ *      - OWNERSHIP: after the resolution period (ResolutionPeriodEnd) the donor
+ *        may confirm with DEFAULT_OPERATION; confirming earlier returns
+ *        ClaimResolutionPeriodNotEnded. Confirming with USER_REQUESTED brings
+ *        CompletionPeriodEnd forward.
+ *      - PORTABILITY: after ResolutionPeriodEnd the donor may cancel with DEFAULT_OPERATION.
+ *   4. Claimer completes (COMPLETED; the entry is created for the claimer).
+ *      OWNERSHIP requires CompletionPeriodEnd to have passed
+ *      (else ClaimCompletionPeriodNotEnded); PORTABILITY only requires CONFIRMED.
+ *   Nothing completes automatically: each step is an API call by a PSP.
+ * Periods: the resolution period is 7 days and, for ownership claims, the
+ * completion period is also 7 days (DICT operational manual; the spec example
+ * shows ResolutionPeriodEnd/CompletionPeriodEnd 7 days after creation). Always
+ * use the dates the DICT returns in the Claim.
+ *
+ * Who may use which reason (spec tables):
+ *   confirm: USER_REQUESTED (donor), ACCOUNT_CLOSURE (donor, portability only),
+ *            DEFAULT_OPERATION (donor, ownership only).
+ *   cancel:  USER_REQUESTED, ACCOUNT_CLOSURE, DEFAULT_OPERATION, FRAUD,
+ *            RECONCILIATION, RFB_VALIDATION (see the spec for donor/claimer rules).
+ *   PARTICIPANT_EXCLUSION is internal to the DICT.
+ *
+ * SIGNATURE: every write must carry an enveloped XMLDSig in <Signature>
+ * (Manual de Seguranca do Pix). The XML built here leaves <Signature></Signature>
+ * empty; it MUST be signed before sending or the DICT refuses it.
  *
  * Usage:
  *   npx tsx scripts/dict/claims-helper.ts create PORTABILITY EMAIL user@example.com
- *   npx tsx scripts/dict/claims-helper.ts confirm <claimId>
- *   npx tsx scripts/dict/claims-helper.ts cancel <claimId>
+ *   npx tsx scripts/dict/claims-helper.ts create OWNERSHIP PHONE +5561988887777
+ *   npx tsx scripts/dict/claims-helper.ts get <claimId>
+ *   npx tsx scripts/dict/claims-helper.ts acknowledge <claimId>
+ *   npx tsx scripts/dict/claims-helper.ts confirm <claimId> [reason]
+ *   npx tsx scripts/dict/claims-helper.ts cancel <claimId> [reason]
+ *   npx tsx scripts/dict/claims-helper.ts complete <claimId>
  */
 
-import { IcomClient } from "../utils/http-client.js";
+import { DictClient } from "../utils/http-client.js";
 import { generateBankAccount, generateNaturalPerson } from "../utils/test-data-generator.js";
-import type { DictKeyType } from "../utils/test-data-generator.js";
+import {
+  type BrazilianAccount,
+  type KeyType,
+  type Person,
+  DictValidationError,
+  SIGNATURE_WARNING,
+  accountNodes,
+  assertEnum,
+  assertKey,
+  assertKeyType,
+  assertParticipant,
+  assertUuid,
+  describeDictError,
+  dictClientFromEnv,
+  dictDocument,
+  installCliErrorHandler,
+  missingEnv,
+  newRequestId,
+  parseDictXml,
+  personNodes,
+  startOfDayBrt,
+  validateAccount,
+  validatePerson,
+} from "./key-lookup.js";
 
-export type ClaimType = "PORTABILITY" | "OWNERSHIP";
-export type ClaimAction = "create" | "confirm" | "cancel";
+export const CLAIM_TYPES = ["OWNERSHIP", "PORTABILITY"] as const;
+export type ClaimType = (typeof CLAIM_TYPES)[number];
 
-interface CreateClaimParams {
+/** Key types each claim type accepts (createClaim compatibility table). */
+export const CLAIM_KEY_TYPES: Record<ClaimType, readonly KeyType[]> = {
+  OWNERSHIP: ["PHONE"],
+  PORTABILITY: ["CPF", "CNPJ", "PHONE", "EMAIL"],
+};
+
+/** ClaimOperationReason values valid for confirmClaim (confirm table). */
+export const CONFIRM_CLAIM_REASONS = ["USER_REQUESTED", "ACCOUNT_CLOSURE", "DEFAULT_OPERATION"] as const;
+export type ConfirmClaimReason = (typeof CONFIRM_CLAIM_REASONS)[number];
+
+/** ClaimOperationReason values valid for cancelClaim (PARTICIPANT_EXCLUSION is DICT-internal). */
+export const CANCEL_CLAIM_REASONS = [
+  "USER_REQUESTED",
+  "ACCOUNT_CLOSURE",
+  "DEFAULT_OPERATION",
+  "FRAUD",
+  "RECONCILIATION",
+  "RFB_VALIDATION",
+] as const;
+export type CancelClaimReason = (typeof CANCEL_CLAIM_REASONS)[number];
+
+export type ClaimAction = "create" | "get" | "acknowledge" | "confirm" | "cancel" | "complete";
+
+export interface CreateClaimParams {
   claimType: ClaimType;
-  keyType: DictKeyType;
+  keyType: KeyType;
   key: string;
-  claimerIspb: string;
-  claimerAccount: {
-    branch: string;
-    accountNumber: string;
-    accountType: string;
-  };
-  claimerOwner: {
-    type: string;
-    name: string;
-    taxIdNumber: string;
-  };
+  /** Claimer's account (Participant = claimer PSP). */
+  claimerAccount: BrazilianAccount;
+  /** Claimer end user. */
+  claimer: Person;
 }
 
-function buildCreateClaimXml(params: CreateClaimParams): string {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<CreateClaimRequest xmlns="urn:bcb:pix:dict:api:v2">
-  <ClaimType>${params.claimType}</ClaimType>
-  <KeyType>${params.keyType}</KeyType>
-  <Key>${params.key}</Key>
-  <Claimer>
-    <Account>
-      <Participant>${params.claimerIspb.padStart(8, "0")}</Participant>
-      <Branch>${params.claimerAccount.branch}</Branch>
-      <AccountNumber>${params.claimerAccount.accountNumber}</AccountNumber>
-      <AccountType>${params.claimerAccount.accountType}</AccountType>
-    </Account>
-    <Owner>
-      <Type>${params.claimerOwner.type}</Type>
-      <Name>${params.claimerOwner.name}</Name>
-      <TaxIdNumber>${params.claimerOwner.taxIdNumber}</TaxIdNumber>
-    </Owner>
-  </Claimer>
-</CreateClaimRequest>`;
+export interface ClaimOperationParams {
+  claimId: string;
+  /** ISPB of the participant performing the operation. */
+  participant: string;
 }
 
-function buildConfirmClaimXml(claimId: string): string {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<ConfirmClaimRequest xmlns="urn:bcb:pix:dict:api:v2">
-  <ClaimId>${claimId}</ClaimId>
-</ConfirmClaimRequest>`;
-}
-
-function buildCancelClaimXml(claimId: string): string {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<CancelClaimRequest xmlns="urn:bcb:pix:dict:api:v2">
-  <ClaimId>${claimId}</ClaimId>
-</CancelClaimRequest>`;
-}
-
-export async function createClaim(
-  client: IcomClient,
-  params: CreateClaimParams,
-): Promise<string> {
-  // Validate: ownership claims only work for PHONE keys
-  if (params.claimType === "OWNERSHIP" && params.keyType !== "PHONE") {
-    console.warn(
-      `WARNING: Ownership claims only work for PHONE keys (Resolution 457/2025). ` +
-      `Key type ${params.keyType} will likely fail.`,
+export function buildCreateClaimRequest(params: CreateClaimParams): string {
+  const claimType = assertEnum(params.claimType, CLAIM_TYPES, "Claim.Type");
+  const keyType = assertKeyType(params.keyType);
+  if (!CLAIM_KEY_TYPES[claimType].includes(keyType)) {
+    throw new DictValidationError(
+      `${claimType} claims accept key types ${CLAIM_KEY_TYPES[claimType].join(", ")}; got ${keyType}`,
     );
   }
+  assertKey(keyType, params.key);
+  validateAccount(params.claimerAccount, "Claim.ClaimerAccount");
+  validatePerson(params.claimer, "Claim.Claimer");
 
-  const xml = buildCreateClaimXml(params);
-  const response = await client.sendMessage(xml);
+  return dictDocument("CreateClaimRequest", [
+    ["Claim", [
+      ["Type", claimType],
+      ["Key", params.key],
+      ["KeyType", keyType],
+      ["ClaimerAccount", accountNodes(params.claimerAccount)],
+      ["Claimer", personNodes(params.claimer)],
+    ]],
+  ]);
+}
 
-  // Extract claim ID from response
-  const match = response.body.match(/<ClaimId>([^<]+)<\/ClaimId>/);
-  const claimId = match ? match[1] : "unknown";
+function claimOperationNodes(params: ClaimOperationParams): [string, string][] {
+  return [
+    ["ClaimId", assertUuid(params.claimId, "ClaimId")],
+    ["Participant", assertParticipant(params.participant)],
+  ];
+}
 
-  console.log(`Claim created: ${claimId}`);
-  return claimId;
+export function buildAcknowledgeClaimRequest(params: ClaimOperationParams): string {
+  return dictDocument("AcknowledgeClaimRequest", claimOperationNodes(params));
+}
+
+export function buildConfirmClaimRequest(params: ClaimOperationParams & { reason: ConfirmClaimReason }): string {
+  return dictDocument("ConfirmClaimRequest", [
+    ...claimOperationNodes(params),
+    ["Reason", assertEnum(params.reason, CONFIRM_CLAIM_REASONS, "Reason")],
+  ]);
+}
+
+export function buildCancelClaimRequest(params: ClaimOperationParams & { reason: CancelClaimReason }): string {
+  return dictDocument("CancelClaimRequest", [
+    ...claimOperationNodes(params),
+    ["Reason", assertEnum(params.reason, CANCEL_CLAIM_REASONS, "Reason")],
+  ]);
+}
+
+/** RequestId: UUID v4 idempotency key (same rules as createEntry). */
+export function buildCompleteClaimRequest(params: ClaimOperationParams & { requestId?: string }): string {
+  return dictDocument("CompleteClaimRequest", [
+    ...claimOperationNodes(params),
+    ["RequestId", assertUuid(params.requestId ?? newRequestId(), "RequestId")],
+  ]);
+}
+
+function claimPath(claimId: string, action?: string): string {
+  return `/claims/${encodeURIComponent(assertUuid(claimId, "ClaimId"))}${action ? `/${action}` : ""}`;
+}
+
+/** Returns the Claim element of a *ClaimResponse (Id, Status, periods...). */
+function claimOf(xml: string): Record<string, any> {
+  const doc = parseDictXml(xml);
+  const root = Object.keys(doc).find((k) => k.endsWith("Response"));
+  return (root && doc[root]?.Claim) ?? {};
+}
+
+export async function createClaim(client: DictClient, params: CreateClaimParams): Promise<Record<string, any>> {
+  const res = await client.call("POST", "/claims/", buildCreateClaimRequest(params));
+  return claimOf(res.body);
+}
+
+export async function getClaim(client: DictClient, claimId: string): Promise<Record<string, any>> {
+  return claimOf((await client.call("GET", claimPath(claimId))).body);
+}
+
+export async function acknowledgeClaim(client: DictClient, params: ClaimOperationParams): Promise<Record<string, any>> {
+  const res = await client.call("POST", claimPath(params.claimId, "acknowledge"), buildAcknowledgeClaimRequest(params));
+  return claimOf(res.body);
 }
 
 export async function confirmClaim(
-  client: IcomClient,
-  claimId: string,
-): Promise<void> {
-  const xml = buildConfirmClaimXml(claimId);
-  await client.sendMessage(xml);
-  console.log(`Claim confirmed: ${claimId}`);
+  client: DictClient,
+  params: ClaimOperationParams & { reason: ConfirmClaimReason },
+): Promise<Record<string, any>> {
+  const res = await client.call("POST", claimPath(params.claimId, "confirm"), buildConfirmClaimRequest(params));
+  return claimOf(res.body);
 }
 
 export async function cancelClaim(
-  client: IcomClient,
-  claimId: string,
-): Promise<void> {
-  const xml = buildCancelClaimXml(claimId);
-  await client.sendMessage(xml);
-  console.log(`Claim cancelled: ${claimId}`);
+  client: DictClient,
+  params: ClaimOperationParams & { reason: CancelClaimReason },
+): Promise<Record<string, any>> {
+  const res = await client.call("POST", claimPath(params.claimId, "cancel"), buildCancelClaimRequest(params));
+  return claimOf(res.body);
+}
+
+export async function completeClaim(
+  client: DictClient,
+  params: ClaimOperationParams & { requestId?: string },
+): Promise<Record<string, any>> {
+  const res = await client.call("POST", claimPath(params.claimId, "complete"), buildCompleteClaimRequest(params));
+  return claimOf(res.body);
 }
 
 // CLI usage
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const action = (process.argv[2] as ClaimAction) || "create";
-  const arg1 = process.argv[3];
-  const arg2 = process.argv[4];
-  const arg3 = process.argv[5];
+  installCliErrorHandler();
+  const action = (process.argv[2] || "create") as ClaimAction;
+  const [arg1, arg2, arg3] = process.argv.slice(3);
+  const ispb = process.env.PSP_ISPB || "12345678";
+  const missing = missingEnv();
+  const demoClaimId = "123e4567-e89b-12d3-a456-426655440000";
 
   console.log(`=== DICT Claims Helper ===`);
-  console.log(`Action: ${action}\n`);
+  console.log(`Action: ${action}`);
+  console.log(`${SIGNATURE_WARNING}\n`);
 
-  if (action === "create") {
-    const claimType = (arg1 as ClaimType) || "PORTABILITY";
-    const keyType = (arg2 as DictKeyType) || "PHONE";
-    const key = arg3 || "+5511999999999";
+  let method: "GET" | "POST" = "POST";
+  let path: string;
+  let xml: string | undefined;
 
-    console.log(`Claim type: ${claimType}`);
-    console.log(`Key type: ${keyType}`);
-    console.log(`Key: ${key}\n`);
-
-    if (claimType === "OWNERSHIP" && keyType !== "PHONE") {
-      console.warn("⚠  WARNING: Ownership claims only work for PHONE keys (Resolution 457/2025)");
-      console.warn("   EMAIL ownership claims will be silently rejected by Bacen.\n");
+  switch (action) {
+    case "create": {
+      const claimType = assertEnum(arg1 || "PORTABILITY", CLAIM_TYPES, "ClaimType");
+      const keyType = assertKeyType(arg2 || "PHONE");
+      const key = arg3 || "+5561988887777";
+      const holder = generateNaturalPerson();
+      const account = generateBankAccount(ispb, holder);
+      path = "/claims/";
+      xml = buildCreateClaimRequest({
+        claimType,
+        keyType,
+        key,
+        claimerAccount: {
+          participant: ispb,
+          branch: account.branch,
+          accountNumber: account.accountNumber,
+          accountType: account.accountType,
+          openingDate: startOfDayBrt(),
+        },
+        claimer: { type: "NATURAL_PERSON", taxIdNumber: holder.document, name: holder.name },
+      });
+      break;
     }
-
-    const holder = generateNaturalPerson();
-    const account = generateBankAccount("12345678", holder);
-
-    console.log("--- Sample XML ---\n");
-    console.log(buildCreateClaimXml({
-      claimType,
-      keyType,
-      key,
-      claimerIspb: "12345678",
-      claimerAccount: {
-        branch: account.branch,
-        accountNumber: account.accountNumber,
-        accountType: account.accountType,
-      },
-      claimerOwner: {
-        type: "NATURAL_PERSON",
-        name: holder.name,
-        taxIdNumber: holder.document,
-      },
-    }));
-  } else if (action === "confirm") {
-    console.log(`Claim ID: ${arg1 || "<required>"}\n`);
-    console.log("--- Sample XML ---\n");
-    console.log(buildConfirmClaimXml(arg1 || "CLAIM-ID-HERE"));
-  } else if (action === "cancel") {
-    console.log(`Claim ID: ${arg1 || "<required>"}\n`);
-    console.log("--- Sample XML ---\n");
-    console.log(buildCancelClaimXml(arg1 || "CLAIM-ID-HERE"));
+    case "get":
+      method = "GET";
+      path = claimPath(arg1 || demoClaimId);
+      break;
+    case "acknowledge":
+      path = claimPath(arg1 || demoClaimId, "acknowledge");
+      xml = buildAcknowledgeClaimRequest({ claimId: arg1 || demoClaimId, participant: ispb });
+      break;
+    case "confirm":
+      path = claimPath(arg1 || demoClaimId, "confirm");
+      xml = buildConfirmClaimRequest({
+        claimId: arg1 || demoClaimId,
+        participant: ispb,
+        reason: (arg2 || "USER_REQUESTED") as ConfirmClaimReason,
+      });
+      break;
+    case "cancel":
+      path = claimPath(arg1 || demoClaimId, "cancel");
+      xml = buildCancelClaimRequest({
+        claimId: arg1 || demoClaimId,
+        participant: ispb,
+        reason: (arg2 || "USER_REQUESTED") as CancelClaimReason,
+      });
+      break;
+    case "complete":
+      path = claimPath(arg1 || demoClaimId, "complete");
+      xml = buildCompleteClaimRequest({ claimId: arg1 || demoClaimId, participant: ispb });
+      break;
+    default:
+      console.error("Actions: create | get | acknowledge | confirm | cancel | complete");
+      process.exit(1);
   }
+
+  if (missing.length > 0 || (action !== "create" && !arg1)) {
+    if (missing.length > 0) console.error(`Missing environment variables: ${missing.join(", ")}\n`);
+    console.log(`--- Demo Mode: ${method} /api/v2${path} ---\n`);
+    if (xml) console.log(xml);
+    process.exit(0);
+  }
+
+  const client = dictClientFromEnv();
+  client.call(method, path, xml)
+    .then((res) => console.log(JSON.stringify(claimOf(res.body), null, 2)))
+    .catch((err) => {
+      console.error(`${action} failed:`, describeDictError(err));
+      process.exitCode = 1;
+    })
+    .finally(() => client.destroy());
 }

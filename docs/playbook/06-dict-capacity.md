@@ -2,7 +2,7 @@
 
 ## Overview
 
-The DICT capacity test verifies that your system can perform a high volume of key lookups under load. Bacen requires you to successfully execute **1,000+ key lookups** against DICT within the test window. This is a formal homologation test scheduled separately from DICT functionality testing.
+The DICT capacity test verifies that your system can perform a high volume of key lookups under load. In the homologations we know of, the bar was **1,000+ successful key lookups** against DICT within the test window; this number comes from practical experience, not from a published Bacen document, so confirm the current criteria with Bacen when scheduling. This is a formal homologation test scheduled separately from DICT functionality testing.
 
 The capacity test is simpler than the SPI capacity test -- it only involves key lookups (GET requests), not full payment processing. However, you still need pre-registered keys to look up and must demonstrate that your system handles concurrent lookups without failures.
 
@@ -12,7 +12,7 @@ The capacity test is simpler than the SPI capacity test -- it only involves key 
 
 ### Bacen Pre-Registered Keys
 
-Before the DICT capacity test, Bacen pre-registers approximately **20,000 test keys** in the homologation DICT environment. These keys are associated with Bacen's virtual participant (ISPB `99999060`).
+Before the DICT capacity test, Bacen pre-registers test keys in the homologation DICT environment. The ranges below were reported by teams that went through the test (they are not in an official document, and the totals reported vary). These keys were reported as held by a Bacen virtual participant, ISPB `99999060` -- this ISPB is **unverified**: it does not appear in the official documents we checked (the SPI Roteiro only names `99999A03` and `99999A04`). Read the participant from the `GetEntryResponse` instead of hard-coding it.
 
 **Key formats:**
 
@@ -21,7 +21,7 @@ Before the DICT capacity test, Bacen pre-registers approximately **20,000 test k
 | EMAIL | 1,000,000 keys | `cliente-000000@pix.bcb.gov.br` to `cliente-999999@pix.bcb.gov.br` |
 | PHONE | 10,000 keys | `+5561900000000` to `+5561900009999` |
 
-These keys are available for lookup during the test. You do not need to create them -- Bacen does this before the test date.
+These keys are available for lookup during the test. You do not need to create them -- Bacen does this before the test date. Do a few manual lookups beforehand to confirm the ranges still exist; a 404 costs 20 tokens of the payer's anti-scan bucket.
 
 ### Partner PSP Keys
 
@@ -143,41 +143,54 @@ console.log(JSON.stringify(keys, null, 2));
 ### Request Format
 
 ```
-GET /api/v2/keys/{keyType}:{keyValue}
+GET https://dict-h.pi.rsfn.net.br:16522/api/v2/entries/{Key}
 ```
 
-Headers:
+Headers (all three `PI-*` are mandatory for every key type):
 ```
-Content-Type: application/xml
+Accept: application/xml
+Accept-Encoding: gzip
 PI-RequestingParticipant: {your ISPB}
-PI-PayerAccountServicer: {your ISPB}
+PI-PayerId: {CPF or CNPJ of the payer, digits only}
+PI-EndToEndId: {EndToEndId of the payment this lookup is for}
 ```
 
-The DICT API uses mTLS authentication with the same certificates used for other Bacen APIs.
+The key goes URL-encoded in the path (e.g. `%2B5561900000000`); the key type is not part of the path. Lookups are not signed, but the response is signed and must be verified. The DICT API uses mTLS authentication with the same RSFN certificates used for ICOM. In this toolkit: `DictClient.call("GET", "/entries/" + encodeURIComponent(key), undefined, { payerId, endToEndId, okStatus: [404] })`.
+
+**Watch the payer buckets:** `PI-PayerId` drives the per-user anti-scan policies (`ENTRIES_READ_USER_ANTISCAN` for EMAIL/PHONE, `ENTRIES_READ_USER_ANTISCAN_V2` for CPF/CNPJ/EVP): PF 2/min with bucket 100, PJ 20/min with bucket 1,000. Running thousands of lookups with a single payer CPF will hit 429 after ~100 lookups. Spread the test over many payer documents, as real traffic would.
 
 ### Response Format
 
 A successful lookup returns XML with account details:
 
 ```xml
-<KeyDetailsResponse>
-  <Key>
-    <Type>EMAIL</Type>
-    <Value>cliente-000001@pix.bcb.gov.br</Value>
-  </Key>
-  <Account>
-    <Participant>99999060</Participant>
-    <Branch>0001</Branch>
-    <AccountNumber>00000001</AccountNumber>
-    <AccountType>CACC</AccountType>
-  </Account>
-  <Owner>
-    <Type>LEGAL_PERSON</Type>
-    <Name>Banco Central do Brasil</Name>
-    <TaxIdNumber>00038166000105</TaxIdNumber>
-  </Owner>
-</KeyDetailsResponse>
+<?xml version="1.0" encoding="UTF-8" ?>
+<GetEntryResponse>
+    <Signature>...</Signature>
+    <ResponseTime>2026-09-28T14:00:00.000Z</ResponseTime>
+    <CorrelationId>a9f13566e19f5ca51329479a5bae60c5</CorrelationId>
+    <Entry>
+        <Key>cliente-000001@pix.bcb.gov.br</Key>
+        <KeyType>EMAIL</KeyType>
+        <Account>
+            <Participant>{ISPB of the PSP holding the key}</Participant>
+            <Branch>0001</Branch>
+            <AccountNumber>00000001</AccountNumber>
+            <AccountType>CACC</AccountType>
+            <OpeningDate>2020-01-10T03:00:00.000Z</OpeningDate>
+        </Account>
+        <Owner>
+            <Type>LEGAL_PERSON</Type>
+            <TaxIdNumber>{CNPJ}</TaxIdNumber>
+            <Name>{Name}</Name>
+        </Owner>
+        <CreationDate>2020-01-10T10:00:00.000Z</CreationDate>
+        <KeyOwnershipDate>2020-01-10T10:00:00.000Z</KeyOwnershipDate>
+    </Entry>
+</GetEntryResponse>
 ```
+
+The structure follows `GetEntryResponse` in DICT API 2.12.1 (no XML namespace; dates in UTC). The account and owner values of Bacen's test keys are placeholders here.
 
 ---
 
@@ -185,24 +198,28 @@ A successful lookup returns XML with account details:
 
 ### DICT Rate Limits
 
-DICT enforces rate limits using a token-bucket algorithm. Key limits:
+DICT enforces rate limits using a token-bucket algorithm (DICT API 2.12.1, "Limitacao de requisicoes"). For lookups:
 
-- **Per-participant global limit**: varies by participant size
-- **Per-operation limits**: lookups have higher limits than mutations
-- **Per-user limits**: operations are tracked per end-user (CPF/CNPJ)
+- **Per participant** (`ENTRIES_READ_PARTICIPANT_ANTISCAN`, all key types): bucket by participant category -- A 25,000/min (bucket 50,000), B 20,000/min (40,000), C 15,000/min (30,000), D 8,000/min (16,000), E 2,500/min (5,000), F 250/min (500), G 25/min (250), H 2/min (50). A 200 costs 1 token, a 404 costs 3, and each payment sent gives 1 back.
+- **Per end user** (`PI-PayerId`): `ENTRIES_READ_USER_ANTISCAN` (EMAIL, PHONE) and `ENTRIES_READ_USER_ANTISCAN_V2` (CPF, CNPJ, EVP) -- PF 2/min (bucket 100), PJ 20/min (bucket 1,000). A 200 costs 1, a 404 costs 20; a payment sent gives back 1 (PF) or 2 (PJ).
+- **Other operations** have their own policies (e.g. `ENTRIES_WRITE` 1,200/min, bucket 36,000). `ENTRIES_STATISTICS_READ` (key statistics) uses the participant categories above.
+
+Check your current buckets with `GET /api/v2/policies/` (itself limited to 6/min).
 
 ### Handling Rate Limits During Capacity Test
 
 - Implement exponential backoff when receiving HTTP 429 responses
-- Track your token consumption client-side to avoid hitting limits
+- Track your token consumption client-side to avoid hitting limits (including the 20-token cost of a 404)
 - Use Redis or in-memory counters to pre-emptively throttle requests
 - Space requests evenly rather than bursting
 
 ### Connection Management
 
-Unlike ICOM (which has a formal 6-connection limit), DICT is a standard HTTPS API. However:
+Unlike ICOM (which allows at most 6 simultaneous read streams per participant), DICT is a standard HTTPS API. However:
 
-- **Reuse TCP connections** (keep-alive) to avoid TLS handshake overhead
+- **Reuse TCP connections** (keep-alive) to avoid TLS handshake overhead; the DICT spec explicitly recommends a connection pool
+- Send `Accept-Encoding: gzip`; never compress request bodies (the DICT does not accept them)
+- Send the `Host` header without the port
 - Monitor connection pool exhaustion under load
 - In Node.js, ensure the HTTP agent is configured for connection reuse:
 
@@ -224,7 +241,7 @@ const agent = new https.Agent({
 
 | Metric | Target | Description |
 |--------|--------|-------------|
-| Total lookups | >= 1,000 | Minimum required by Bacen |
+| Total lookups | >= 1,000 | Bar reported by past homologations (not an official number) |
 | Success rate | >= 95% | Percentage of 200 responses |
 | Latency p50 | < 500ms | Median response time |
 | Latency p95 | < 2000ms | 95th percentile response time |
@@ -267,7 +284,7 @@ const agent = new https.Agent({
 
 ### Passing Criteria
 
-Bacen evaluates:
+From past homologations, Bacen evaluates:
 1. **Volume**: Did you complete 1,000+ lookups?
 2. **Success rate**: Were most lookups successful?
 3. **System stability**: Did your system remain stable throughout?
@@ -275,7 +292,7 @@ Bacen evaluates:
 Bacen does not publish exact pass/fail thresholds, but from experience:
 - 1,000 successful lookups is the minimum bar
 - A few failures (< 5%) are acceptable
-- The test is less demanding than SPI capacity (which requires 20,000 transactions)
+- The test is less demanding than SPI capacity (10,000, 20,000 or 40,000 pacs.008 in 10 minutes depending on the number of accounts -- see [04 - SPI Capacity](04-spi-capacity.md))
 
 ### What Bacen Checks
 
@@ -288,8 +305,8 @@ Bacen does not publish exact pass/fail thresholds, but from experience:
 ## Common Failure Modes
 
 ### HTTP 429 (Too Many Requests)
-**Cause:** Exceeding DICT rate limits.
-**Solution:** Reduce concurrency. Implement client-side rate limiting. Use exponential backoff on 429 responses.
+**Cause:** Exceeding DICT rate limits -- usually the per-user anti-scan bucket (same `PI-PayerId` for every lookup) or too many 404s (20 tokens each), rather than the participant bucket.
+**Solution:** Spread lookups over many payer documents, avoid looking up keys that do not exist, implement client-side rate limiting and use exponential backoff on 429 responses.
 
 ### TLS Handshake Failures
 **Cause:** Certificate issues or connection pool exhaustion.
@@ -342,3 +359,11 @@ Bacen does not publish exact pass/fail thresholds, but from experience:
    - Verify total lookup count exceeds 1,000
    - Bacen will communicate results (pass/fail) -- typically on the same day or within a few days
    - If failed, you can reschedule (usually within 1-2 weeks)
+
+---
+
+## Sources
+
+- DICT API 2.12.1 (endpoints, headers, rate-limit policies; local copy: `simulator/spec/dict-2.12.1/openapi.json`): https://www.bcb.gov.br/content/estabilidadefinanceira/pix/API-DICT.html
+- Roteiro para Participacao Direta no SPI (SPI capacity tiers): https://www.bcb.gov.br/content/estabilidadefinanceira/sistemapagamentosinstantaneos_docs/Roteiro_para_Participacao_Direta_no_SPI_e_abertura_de_Conta_PI.pdf
+- The DICT capacity test procedure, volumes and Bacen test keys described here come from homologation experience; we did not find them in an official document.

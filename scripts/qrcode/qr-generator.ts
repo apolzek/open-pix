@@ -1,158 +1,102 @@
 /**
- * Pix QR Code Generator.
+ * Pix QR Code Generator (BR Code).
  *
- * Generates EMV-compatible QR code payloads for Pix:
- * - Static QR: Fixed amount, reusable (26.xx TLV)
- * - COB (Cobranca): Dynamic QR with unique URL (62.05 TLV)
- * - COBV (Cobranca com Vencimento): Dynamic QR with due date
- *
- * EMV QR Code Specification (based on BR Code / Pix):
- * - TLV (Tag-Length-Value) encoding
- * - CRC-16/CCITT-FALSE checksum (tag 63)
- * - Merchant Account Info (tag 26): GUI + key/URL
+ * Follows the Manual de Padroes para Iniciacao do Pix 2.10.0, section 2:
+ * - Static QR: Pix key in 26-01, optional amount (54), optional free text
+ *   (infoAdicional, 26-02), optional withdrawal facilitator (fss, 26-03) and
+ *   txid in 62-05 ("***" when there is none). Reusable.
+ * - Dynamic QR: payload URL in 26-25 (no "https://"), amount and txid come
+ *   from the JSON behind the URL. 62-05 carries "***".
+ *   COB (immediate) and COBV (with due date) differ only in the URL payload.
+ * - ID 01 = "12" is optional and means the QR must not be paid more than
+ *   once. Having an amount does not make a QR single-use.
+ * - The key, infoAdicional and fss share the 99 chars of template 26.
  *
  * Usage:
- *   npx tsx scripts/qrcode/qr-generator.ts static <pixKey> <amount>
+ *   npx tsx scripts/qrcode/qr-generator.ts static <pixKey> [amount]
  *   npx tsx scripts/qrcode/qr-generator.ts cob <pixUrl>
  *   npx tsx scripts/qrcode/qr-generator.ts cobv <pixUrl>
  */
 
-// CRC-16/CCITT-FALSE lookup table
-const CRC_TABLE = new Uint16Array(256);
-for (let i = 0; i < 256; i++) {
-  let crc = i << 8;
-  for (let j = 0; j < 8; j++) {
-    crc = (crc << 1) ^ (crc & 0x8000 ? 0x1021 : 0);
-  }
-  CRC_TABLE[i] = crc & 0xffff;
-}
-
-function crc16(data: string): string {
-  let crc = 0xffff;
-  for (let i = 0; i < data.length; i++) {
-    crc = ((crc << 8) & 0xffff) ^ CRC_TABLE[((crc >> 8) ^ data.charCodeAt(i)) & 0xff];
-  }
-  return crc.toString(16).toUpperCase().padStart(4, "0");
-}
-
-function tlv(tag: string, value: string): string {
-  const len = value.length.toString().padStart(2, "0");
-  return `${tag}${len}${value}`;
-}
+import { PIX_GUI, MAX_TEMPLATE_LENGTH, tlv, withCrc } from "./emv.js";
 
 export type QrType = "static" | "cob" | "cobv";
 
 export interface StaticQrParams {
   pixKey: string;
+  /** Shown only as fallback: the payer app displays the name from the DICT. */
   merchantName: string;
   merchantCity: string;
   amount?: number;
+  /** infoAdicional (26-02). Throws if key + text exceed the template size. */
   description?: string;
+  /** ISPB of the withdrawal facilitator (Pix Saque). */
+  fss?: string;
+  /** txid: up to 25 chars [a-zA-Z0-9]. */
   txId?: string;
+  /** Adds ID 01 = "12" (do not pay more than once). */
+  singleUse?: boolean;
 }
 
 export interface DynamicQrParams {
+  /** URL of the payload, without "https://". */
   pixUrl: string;
   merchantName: string;
   merchantCity: string;
+  /** Adds ID 01 = "12". Recommended for immediate charges. */
+  singleUse?: boolean;
 }
 
-const PIX_GUI = "br.gov.bcb.pix";
+const TXID_PATTERN = /^[a-zA-Z0-9]{1,25}$/;
+
+function header(singleUse?: boolean): string {
+  // 00 - Payload Format Indicator
+  return tlv("00", "01") + (singleUse ? tlv("01", "12") : "");
+}
+
+/** IDs 52..62 in order; the amount (54) sits between currency and country. */
+function merchantFields(merchantName: string, merchantCity: string, txId: string, amount?: number): string {
+  return (
+    tlv("52", "0000") + // Merchant Category Code, "0000" = not informed
+    tlv("53", "986") + // BRL
+    (amount !== undefined ? tlv("54", amount.toFixed(2)) : "") +
+    tlv("58", "BR") +
+    tlv("59", merchantName.slice(0, 25)) +
+    tlv("60", merchantCity.slice(0, 15)) +
+    tlv("62", tlv("05", txId))
+  );
+}
 
 export function generateStaticQr(params: StaticQrParams): string {
-  let payload = "";
-
-  // 00 - Payload Format Indicator
-  payload += tlv("00", "01");
-
-  // 01 - Point of Initiation Method (11=static/reusable, 12=dynamic/single-use)
-  payload += tlv("01", params.amount ? "12" : "11");
-
-  // 26 - Merchant Account Information (Pix)
-  let mai = "";
-  mai += tlv("00", PIX_GUI);       // GUI
-  mai += tlv("01", params.pixKey);  // Pix key
-  if (params.description) {
-    mai += tlv("02", params.description.slice(0, 72));
+  if (params.txId !== undefined && !TXID_PATTERN.test(params.txId)) {
+    throw new Error("txid must have up to 25 chars [a-zA-Z0-9]");
   }
-  payload += tlv("26", mai);
-
-  // 52 - Merchant Category Code
-  payload += tlv("52", "0000");
-
-  // 53 - Transaction Currency (986 = BRL)
-  payload += tlv("53", "986");
-
-  // 54 - Transaction Amount (optional for static)
-  if (params.amount) {
-    payload += tlv("54", params.amount.toFixed(2));
+  if (params.fss !== undefined && !/^[0-9A-Z]{8}$/.test(params.fss)) {
+    throw new Error("fss must be an ISPB [0-9A-Z]{8}");
   }
 
-  // 58 - Country Code
-  payload += tlv("58", "BR");
-
-  // 59 - Merchant Name
-  payload += tlv("59", params.merchantName.slice(0, 25));
-
-  // 60 - Merchant City
-  payload += tlv("60", params.merchantCity.slice(0, 15));
-
-  // 62 - Additional Data Field
-  if (params.txId) {
-    let adf = "";
-    adf += tlv("05", params.txId.slice(0, 25)); // Reference Label (txId)
-    payload += tlv("62", adf);
-  } else {
-    payload += tlv("62", tlv("05", "***")); // Default: any txId
+  let mai = tlv("00", PIX_GUI) + tlv("01", params.pixKey);
+  if (params.description) mai += tlv("02", params.description);
+  if (params.fss) mai += tlv("03", params.fss);
+  if (mai.length > MAX_TEMPLATE_LENGTH) {
+    throw new Error(
+      `Template 26 has ${mai.length} chars (max 99): shorten the description, the key and description share the space`,
+    );
   }
 
-  // 63 - CRC16 (compute over entire payload including tag 63 header)
-  const crcInput = payload + "6304";
-  const checksum = crc16(crcInput);
-  payload += `6304${checksum}`;
-
-  return payload;
+  return withCrc(
+    header(params.singleUse) +
+      tlv("26", mai) +
+      merchantFields(params.merchantName, params.merchantCity, params.txId ?? "***", params.amount),
+  );
 }
 
-export function generateDynamicQr(params: DynamicQrParams, type: "cob" | "cobv" = "cob"): string {
-  let payload = "";
-
-  // 00 - Payload Format Indicator
-  payload += tlv("00", "01");
-
-  // 01 - Point of Initiation Method (12 = dynamic/single-use)
-  payload += tlv("01", "12");
-
-  // 26 - Merchant Account Information
-  let mai = "";
-  mai += tlv("00", PIX_GUI);
-  mai += tlv("25", params.pixUrl); // URL for dynamic QR
-  payload += tlv("26", mai);
-
-  // 52 - Merchant Category Code
-  payload += tlv("52", "0000");
-
-  // 53 - Transaction Currency (986 = BRL)
-  payload += tlv("53", "986");
-
-  // 58 - Country Code
-  payload += tlv("58", "BR");
-
-  // 59 - Merchant Name
-  payload += tlv("59", params.merchantName.slice(0, 25));
-
-  // 60 - Merchant City
-  payload += tlv("60", params.merchantCity.slice(0, 15));
-
-  // 62 - Additional Data Field
-  payload += tlv("62", tlv("05", "***"));
-
-  // 63 - CRC16
-  const crcInput = payload + "6304";
-  const checksum = crc16(crcInput);
-  payload += `6304${checksum}`;
-
-  return payload;
+export function generateDynamicQr(params: DynamicQrParams, _type: "cob" | "cobv" = "cob"): string {
+  if (/^https?:\/\//i.test(params.pixUrl)) {
+    throw new Error('pixUrl goes without "https://"');
+  }
+  const mai = tlv("00", PIX_GUI) + tlv("25", params.pixUrl);
+  return withCrc(header(params.singleUse) + tlv("26", mai) + merchantFields(params.merchantName, params.merchantCity, "***"));
 }
 
 // CLI usage
@@ -187,6 +131,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         pixUrl,
         merchantName: "EMPRESA SA",
         merchantCity: "SAO PAULO",
+        singleUse: true,
       }, "cob");
       console.log("Payload:");
       console.log(payload);

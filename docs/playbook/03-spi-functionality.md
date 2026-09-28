@@ -1,155 +1,174 @@
 # Pix Direct Participant Homologation: SPI Functionality
 
-SPI functionality testing is the most detailed and time-consuming phase of homologation. You must demonstrate that your system correctly implements all SPI message types, handles all local instruments, manages timeouts, processes errors, and interacts correctly with both Bacen's virtual participant and a real partner PSP.
+SPI functionality testing is the most detailed and time-consuming phase of homologation. You must demonstrate that your system correctly implements the SPI message types, handles the local instruments, manages timeouts, processes errors, and interacts correctly with Bacen's virtual participants.
 
 ## Business Application Header (BAH)
 
-Every SPI message is wrapped in a BAH envelope. The BAH provides routing and identification metadata that Bacen uses to deliver messages to the correct participant.
+Every SPI message travels inside an `Envelope` that holds the Business Application Header (`AppHdr`) and the `Document`. The envelope has a single default namespace per message type and version; `AppHdr` and `Document` carry no namespace of their own (there is no separate `head.001` or `urn:iso:...` namespace).
 
 ### BAH Structure
 
 ```xml
-<AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
-  <Fr>
-    <FIId>
-      <FinInstnId>
-        <Othr>
-          <Id>{SENDER_ISPB}</Id>
-        </Othr>
-      </FinInstnId>
-    </FIId>
-  </Fr>
-  <To>
-    <FIId>
-      <FinInstnId>
-        <Othr>
-          <Id>{RECEIVER_ISPB}</Id>
-        </Othr>
-      </FinInstnId>
-    </FIId>
-  </To>
-  <BizMsgIdr>{BUSINESS_MESSAGE_ID}</BizMsgIdr>
-  <MsgDefIdr>{MESSAGE_DEFINITION}</MsgDefIdr>
-  <CreDt>{ISO_TIMESTAMP}</CreDt>
-</AppHdr>
+<Envelope xmlns="https://www.bcb.gov.br/pi/pacs.008/1.16">
+  <AppHdr>
+    <Fr>
+      <FIId>
+        <FinInstnId>
+          <Othr>
+            <Id>{YOUR_ISPB}</Id>
+          </Othr>
+        </FinInstnId>
+      </FIId>
+    </Fr>
+    <To>
+      <FIId>
+        <FinInstnId>
+          <Othr>
+            <Id>00038166</Id>
+          </Othr>
+        </FinInstnId>
+      </FIId>
+    </To>
+    <BizMsgIdr>{BUSINESS_MESSAGE_ID}</BizMsgIdr>
+    <MsgDefIdr>pacs.008.spi.1.16</MsgDefIdr>
+    <CreDt>{UTC_TIMESTAMP}</CreDt>
+    <Sgntr/>
+  </AppHdr>
+  <Document>
+    <!-- message body -->
+  </Document>
+</Envelope>
 ```
+
+`Sgntr` carries the XMLDSig signature (Manual de Segurança da RSFN). Bacen's own examples leave it empty; the toolkit does the same, so sign before sending.
 
 ### Key BAH Fields
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `Fr` / `To` | Sender and receiver ISPBs | `12345678` |
-| `BizMsgIdr` | Unique message identifier | `M1234567820240115103000abcdef` |
-| `MsgDefIdr` | Message type identifier | `pacs.008.001.08` |
-| `CreDt` | Creation timestamp (ISO 8601) | `2024-01-15T10:30:00.000Z` |
+| `Fr` | ISPB of the sender of *this* message | `12345678` (you) or `00038166` (SPI) |
+| `To` | ISPB of the receiver of *this* message. A PSP always sends to the SPI, so `To` is always `00038166`; the counterparty PSP only appears in `DbtrAgt`/`CdtrAgt` inside the Document | `00038166` |
+| `BizMsgIdr` | Unique message identifier (32 chars) | `M12345678abcdefghijklmnopqrstuvw` |
+| `MsgDefIdr` | Message type and version, `<type>.spi.<version>` | `pacs.008.spi.1.16` |
+| `CreDt` | Creation timestamp, UTC with milliseconds | `2026-09-28T14:35:12.345Z` |
+
+All date-times in SPI messages are UTC with milliseconds (`YYYY-MM-DDThh:mm:ss.sssZ`); the XSD pattern enforces the `.sss` and the `Z`. Local offsets such as `-03:00` are rejected.
 
 ## Identifier Formats
 
 ### EndToEndId (E2E ID)
 
-The EndToEndId uniquely identifies a Pix transaction across all participants. It is present in `pacs.008`, `pacs.002`, and referenced in `pacs.004`.
+The EndToEndId uniquely identifies a Pix transaction across all participants. It is present in `pacs.008`, in the `pacs.002` (`OrgnlEndToEndId`), and in the `pacs.004` (`OrgnlEndToEndId`).
 
-**Format**: `E{ISPB 8 digits}{YYYYMMDD}{HHmm}{random}` = **32 characters total**
+**Format**: `E{ISPB}{yyyyMMddHHmm UTC}{11 alphanumeric}` = **32 characters total**
 
 ```
-E 12345678 20240115 1030 abcdef1234567890
-│ │        │        │    │
-│ │        │        │    └─ Random alphanumeric (remaining chars to reach 32)
-│ │        │        └─ Time (HHmm)
-│ │        └─ Date (YYYYMMDD)
-│ └─ Your ISPB (8 digits, zero-padded)
+E 12345678 202609281435 abcDEF12345
+│ │        │            │
+│ │        │            └─ 11 alphanumeric chars [a-zA-Z0-9]
+│ │        └─ Date and time in UTC (yyyyMMddHHmm)
+│ └─ ISPB, 8 chars [0-9A-Z] (e.g. 99999A04 is valid)
 └─ Literal "E" prefix
 ```
 
 **Rules:**
 - Must be exactly 32 characters
 - Must start with uppercase `E`
-- ISPB must be your institution's ISPB (the originator)
-- Date/time must match the transaction creation time
-- Random portion must ensure uniqueness (no collisions)
+- The ISPB is the one of the participant that generated the id (direct or indirect participant); the first 8 digits of the initiator's CNPJ may also be used
+- Date/time is **UTC**, not Brasília time; the SPI tolerates ±12 hours relative to its processing time
+- The 11-char suffix must be unique within each `yyyyMMddHHmm`
 - Alphanumeric characters only (a-z, A-Z, 0-9)
 
 ### BizMsgIdr (Business Message Identifier)
 
-The BizMsgIdr uniquely identifies each ICOM message (not the transaction, but the specific XML message).
+The BizMsgIdr uniquely identifies each ICOM message (not the transaction, but the specific XML message). The Document's `GrpHdr/MsgId` uses the same format.
 
-**Format**: `M{ISPB 8 digits}{random}` = **32 characters total**
+**Format**: `M{ISPB}{23 alphanumeric}` = **32 characters total**
 
 ```
-M 12345678 abcdef1234567890abcdefg
+M 12345678 abcdefghijklmnopqrstuvw
 │ │        │
-│ │        └─ Random alphanumeric (remaining chars to reach 32)
-│ └─ Your ISPB (8 digits, zero-padded)
+│ │        └─ 23 alphanumeric chars [a-zA-Z0-9], case sensitive
+│ └─ Your ISPB, 8 chars [0-9A-Z]
 └─ Literal "M" prefix
 ```
 
 **Rules:**
 - Must be exactly 32 characters
 - Must start with uppercase `M`
-- Must be unique across all messages you send
+- Must never repeat across all messages you send
 - A single transaction may have multiple BizMsgIdrs (one for the pacs.008, one for the pacs.002, etc.)
 
 ## pacs.008 - FIToFICustomerCreditTransfer
 
-The `pacs.008` is the payment initiation message. It flows from the debtor's institution to the creditor's institution via Bacen.
+The `pacs.008` is the payment order. It flows from the payer's PSP to the SPI, which makes it available to the receiver's PSP.
 
-### Multi-Version Support
+### Message Versions
 
-Bacen evolves the `pacs.008` specification over time. During homologation, you must support multiple versions simultaneously:
+Each SPI message has its own version; there is no single catalog-wide "spi.1.x" version. In catalog 5.13:
 
-| Version | Namespace | Status |
-|---------|-----------|--------|
-| 1.11 | `urn:iso:std:iso:20022:tech:xsd:pacs.008.spi.1.11` | Legacy, still accepted |
-| 1.12 | `urn:iso:std:iso:20022:tech:xsd:pacs.008.spi.1.12` | Current |
-| 1.13 | `urn:iso:std:iso:20022:tech:xsd:pacs.008.spi.1.13` | Latest |
+| Message | Namespace | `MsgDefIdr` |
+|---------|-----------|-------------|
+| pacs.008 | `https://www.bcb.gov.br/pi/pacs.008/1.16` | `pacs.008.spi.1.16` |
+| pacs.002 | `https://www.bcb.gov.br/pi/pacs.002/1.17` | `pacs.002.spi.1.17` |
+| pacs.004 | `https://www.bcb.gov.br/pi/pacs.004/1.5` | `pacs.004.spi.1.5` |
 
-Your system must be able to:
-- **Send** using the latest version
-- **Receive and process** all supported versions (a counterparty may send an older version)
-- Parse version-specific fields correctly (newer versions add optional fields)
+Which versions are enabled in an environment is published by the ICOM catalog: `GET /api/v1/in/catalog` (what you may send) and `GET /api/v1/out/catalog` (what you may receive). An error like "Schema desconhecido ou não habilitado para uso" means you sent a version that is not in the catalog; check the catalog instead of guessing another version. When Bacen publishes a new catalog, keep parsing the versions that the `out` catalog still lists.
 
 ### Required Fields
 
-The core fields in a `pacs.008` include:
+The structure below follows Bacen's official example (`simulator/spec/spi-5.13.1/exemplos/pacs.008_*.xml`) and is what `generatePacs008` produces:
 
 ```xml
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.spi.1.13">
+<Document>
   <FIToFICstmrCdtTrf>
     <GrpHdr>
       <MsgId>{MESSAGE_ID}</MsgId>
-      <CreDtTm>{TIMESTAMP}</CreDtTm>
+      <CreDtTm>{UTC_TIMESTAMP}</CreDtTm>
       <NbOfTxs>1</NbOfTxs>
       <SttlmInf>
         <SttlmMtd>CLRG</SttlmMtd>
       </SttlmInf>
+      <PmtTpInf>
+        <InstrPrty>HIGH</InstrPrty>
+        <SvcLvl>
+          <Prtry>PAGPRI</Prtry>
+        </SvcLvl>
+      </PmtTpInf>
     </GrpHdr>
     <CdtTrfTxInf>
       <PmtId>
         <EndToEndId>{E2E_ID}</EndToEndId>
-        <TxId>{TX_ID}</TxId>
       </PmtId>
-      <PmtTpInf>
-        <SvcLvl>
-          <Prtry>PAGPIX</Prtry>
-        </SvcLvl>
-        <LclInstrm>
-          <Prtry>{LOCAL_INSTRUMENT}</Prtry>
-        </LclInstrm>
-      </PmtTpInf>
       <IntrBkSttlmAmt Ccy="BRL">{AMOUNT}</IntrBkSttlmAmt>
-      <IntrBkSttlmDt>{DATE}</IntrBkSttlmDt>
+      <AccptncDtTm>{UTC_TIMESTAMP_ACCEPTED_BY_PAYER_PSP}</AccptncDtTm>
       <ChrgBr>SLEV</ChrgBr>
+      <MndtRltdInf>
+        <Tp>
+          <LclInstrm>
+            <Prtry>{LOCAL_INSTRUMENT}</Prtry>
+          </LclInstrm>
+        </Tp>
+      </MndtRltdInf>
       <Dbtr>
         <Nm>{DEBTOR_NAME}</Nm>
+        <Id>
+          <PrvtId>
+            <Othr>
+              <Id>{DEBTOR_CPF}</Id>
+            </Othr>
+          </PrvtId>
+        </Id>
       </Dbtr>
       <DbtrAcct>
         <Id>
           <Othr>
             <Id>{DEBTOR_ACCOUNT}</Id>
+            <Issr>{DEBTOR_BRANCH}</Issr>
           </Othr>
         </Id>
         <Tp>
-          <Prtry>{ACCOUNT_TYPE}</Prtry>
+          <Cd>CACC</Cd>
         </Tp>
       </DbtrAcct>
       <DbtrAgt>
@@ -167,209 +186,337 @@ The core fields in a `pacs.008` include:
         </FinInstnId>
       </CdtrAgt>
       <Cdtr>
-        <Nm>{CREDITOR_NAME}</Nm>
+        <Id>
+          <PrvtId>
+            <Othr>
+              <Id>{CREDITOR_CPF}</Id>
+            </Othr>
+          </PrvtId>
+        </Id>
       </Cdtr>
       <CdtrAcct>
         <Id>
           <Othr>
             <Id>{CREDITOR_ACCOUNT}</Id>
+            <Issr>{CREDITOR_BRANCH}</Issr>
           </Othr>
         </Id>
         <Tp>
-          <Prtry>{ACCOUNT_TYPE}</Prtry>
+          <Cd>CACC</Cd>
         </Tp>
+        <Prxy>
+          <Id>{PIX_KEY}</Id>
+        </Prxy>
       </CdtrAcct>
+      <Purp>
+        <Cd>IPAY</Cd>
+      </Purp>
     </CdtTrfTxInf>
   </FIToFICstmrCdtTrf>
 </Document>
 ```
 
+Points that commonly go wrong:
+
+- `PmtTpInf` lives in `GrpHdr`. `InstrPrty` `HIGH` requires `SvcLvl` `PAGPRI`; `NORM` requires `PAGAGD` (scheduled) or `PAGFRD` (under fraud analysis).
+- `AccptncDtTm` (t0') is when the payer's PSP accepted the order. The 40-second settlement limit counts from it.
+- There is no `IntrBkSttlmDt` in the pacs.008, and the local instrument sits in `MndtRltdInf/Tp/LclInstrm`, not in `PmtTpInf`.
+- The creditor (`Cdtr`) has **no name**, only CPF/CNPJ. The debtor needs `Nm` and CPF/CNPJ. CNPJs may be alphanumeric (`[0-9A-Z]{12}[0-9]{2}`).
+- Account `Id` is `[0-9A-Z]{1,20}`; `Issr` is the branch (up to 4 digits, optional); `Tp/Cd` is one of `CACC`, `SVGS`, `TRAN`, `SLRY`, `OTHR`.
+- `Purp/Cd` is one of `IPAY`, `GSCB`, `OTHR`, `REFU`, `IPRT`.
+
 ### Local Instruments
 
-The local instrument (`LclInstrm/Prtry`) specifies how the payment was initiated. Each instrument has specific requirements:
+The local instrument (`MndtRltdInf/Tp/LclInstrm/Prtry`) specifies how the payment was initiated:
 
-| Instrument | Description | Key Requirements |
-|------------|-------------|-----------------|
-| **MANU** | Manual entry | Debtor manually entered account details. No DICT lookup. |
-| **DICT** | DICT key lookup | Payment initiated via Pix key. DICT lookup must precede the payment. |
-| **QRDN** | Dynamic QR code | Payment initiated by scanning a dynamic QR code. QR code payload must be included. |
-| **QRES** | Static QR code | Payment initiated by scanning a static QR code. |
-| **INIC** | Pix Iniciador (Payment Initiator) | Payment initiated by a third-party payment initiator. Additional fields required. |
+| Instrument | Description | `CdtrAcct/Prxy` (Pix key) |
+|------------|-------------|---------------------------|
+| **MANU** | Manual entry of the account data | Forbidden |
+| **DICT** | Manual entry of a Pix key (DICT lookup precedes the payment) | Required |
+| **QRDN** | Dynamic QR code | Required |
+| **QRES** | Static QR code | Required |
+| **INIC** | Initiated through a payment initiation service, with all receiver data known | Required |
+| **AUTO** | Pix Automático | Forbidden |
+| **APDN** | Pix by proximity, from dynamic QR code data | Required |
+| **APES** | Pix by proximity, from static QR code data | Required |
 
-Each instrument must be tested during homologation. The virtual participant accepts all instruments, but bilateral testing with a partner PSP validates real-world behavior.
+QR code and payment initiation payments may also carry `TxId` (the receiver's reconciliation id) and, for INIC, the initiator's CNPJ in `InitgPty`; `generatePacs008` exposes them as `txId` and `initiatingPartyCnpj`.
 
-## pacs.002 - PaymentStatusReport
+### Generating with the toolkit
 
-The `pacs.002` is the response to a `pacs.008`. When your institution receives a `pacs.008` (someone is sending money to your customer), you must respond with a `pacs.002` indicating acceptance or rejection.
+```typescript
+import { generatePacs008 } from "../scripts/spi/pacs008-generator.js";
+
+const xml = generatePacs008({
+  senderIspb: "12345678",          // your ISPB: AppHdr/Fr and DbtrAgt
+  receiverIspb: "99999A04",        // CdtrAgt; AppHdr/To is always 00038166
+  amount: 10.5,
+  localInstrument: "DICT",
+  proxy: "+5561988887777",
+  debitParty: { name: "Fulano de Tal", document: "11111111111", branch: "0001", accountNumber: "123456", accountType: "CACC" },
+  creditParty: { document: "22222222222", branch: "1", accountNumber: "1", accountType: "CACC" },
+});
+```
+
+## pacs.002 - FIToFIPaymentStatusReport
+
+The `pacs.002` is the status report for a `pacs.008` or `pacs.004`. When your institution receives a `pacs.008` (someone is sending money to your customer), you must answer with a `pacs.002` addressed to the SPI (`AppHdr/To` = `00038166`) indicating acceptance or rejection. The SPI then settles and sends its own `pacs.002` (`ACSC` to the payer's PSP, `ACCC` to the receiver's PSP, or `RJCT`) to both sides.
 
 ### Acceptance (ACSP)
 
 ```xml
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.spi.1.13">
-  <FIToFIPmtStsRpt>
-    <GrpHdr>
-      <MsgId>{MESSAGE_ID}</MsgId>
-      <CreDtTm>{TIMESTAMP}</CreDtTm>
-    </GrpHdr>
-    <TxInfAndSts>
-      <OrgnlEndToEndId>{ORIGINAL_E2E_ID}</OrgnlEndToEndId>
-      <TxSts>ACSP</TxSts>
-    </TxInfAndSts>
-  </FIToFIPmtStsRpt>
-</Document>
+<Envelope xmlns="https://www.bcb.gov.br/pi/pacs.002/1.17">
+  <AppHdr>
+    <!-- Fr = your ISPB, To = 00038166, MsgDefIdr = pacs.002.spi.1.17 -->
+  </AppHdr>
+  <Document>
+    <FIToFIPmtStsRpt>
+      <GrpHdr>
+        <MsgId>{MESSAGE_ID}</MsgId>
+        <CreDtTm>{UTC_TIMESTAMP}</CreDtTm>
+      </GrpHdr>
+      <TxInfAndSts>
+        <OrgnlInstrId>{ORIGINAL_E2E_ID}</OrgnlInstrId>
+        <OrgnlEndToEndId>{ORIGINAL_E2E_ID}</OrgnlEndToEndId>
+        <TxSts>ACSP</TxSts>
+      </TxInfAndSts>
+    </FIToFIPmtStsRpt>
+  </Document>
+</Envelope>
 ```
 
-`ACSP` (Accepted Settlement in Process) tells the originating institution that you have accepted the payment and will credit the recipient's account.
+There is no `OrgnlGrpInfAndSts`. `OrgnlInstrId` repeats the EndToEndId for a normal Pix. `ACSP` (Accepted Settlement in Process) tells the SPI that you accept the payment and it can settle.
 
 ### Rejection (RJCT)
 
 ```xml
 <TxInfAndSts>
+  <OrgnlInstrId>{ORIGINAL_E2E_ID}</OrgnlInstrId>
   <OrgnlEndToEndId>{ORIGINAL_E2E_ID}</OrgnlEndToEndId>
   <TxSts>RJCT</TxSts>
   <StsRsnInf>
     <Rsn>
-      <Prtry>{REASON_CODE}</Prtry>
+      <Cd>{REASON_CODE}</Cd>
     </Rsn>
+    <AddtlInf>{OPTIONAL_TEXT_UP_TO_105_CHARS}</AddtlInf>
   </StsRsnInf>
 </TxInfAndSts>
 ```
 
-Common rejection reason codes:
+```typescript
+import { generatePacs002 } from "../scripts/spi/pacs002-generator.js";
 
-| Code | Meaning |
-|------|---------|
-| `AC03` | Invalid creditor account number |
-| `AC06` | Blocked account |
-| `AC07` | Closed creditor account |
-| `AC14` | Account type not supported |
-| `AG03` | Transaction type not supported |
-| `AG13` | Invalid creditor account type |
-| `AM02` | Amount exceeds limit |
-| `AM09` | Wrong amount |
-| `BE01` | Inconsistent with end customer |
-| `BE17` | Invalid or missing creditor identification |
-| `DS04` | Order rejected by the system |
-| `DS27` | Regulatory reason |
-| `MD06` | Refund request by end customer |
-| `RC09` | Invalid branch |
-| `RR04` | Regulatory reason |
+const xml = generatePacs002({
+  senderIspb: "12345678",
+  originalEndToEndId: e2eId,
+  status: "RJCT",
+  rejectReasonCode: "AC03",
+});
+```
 
-### The 10-Second Timeout (AB03)
+Common rejection reason codes (from the catalog's `ExternalStatusReason1Code`; the full enum is in the XSD):
 
-This is one of the most critical constraints in the Pix protocol:
+| Code | Meaning | Raised by |
+|------|---------|-----------|
+| `AC03` | Receiver's branch/account missing or invalid | Receiver's PSP |
+| `AC06` | Receiver's account is blocked | Receiver's PSP |
+| `AC07` | Receiver's account is closed | Receiver's PSP |
+| `AC14` | Wrong account type for the receiver's account | Receiver's PSP |
+| `AG03` | Transaction type not supported on the account (e.g. salary account) | Receiver's PSP |
+| `AM02` | Amount exceeds the limit allowed for the credited account type | Receiver's PSP |
+| `BE01` | Receiver's CPF/CNPJ does not match the account holder | Receiver's PSP |
+| `BE17` | QR code rejected by the receiver's PSP | Receiver's PSP |
+| `DS04` | Order rejected by the receiver's PSP | Receiver's PSP |
+| `FRAD` | Rejected for well-founded suspicion of fraud | Receiver's PSP |
+| `RR04` | Regulatory reason (payer sanctioned by UN Security Council resolution) | Receiver's PSP |
+| `AM09` | Return would exceed the amount of the original payment | Receiver's PSP of the return |
+| `AG13` | A return cannot itself be returned | SPI |
+| `AB03` | Settlement aborted due to timeout in the SPI | SPI |
+| `DS27` | Participant not registered or not yet operating in the SPI | SPI |
+| `RC09` | Payer's PSP ISPB invalid or missing | SPI |
+| `ED05` | Generic processing error | SPI / receiver's PSP |
 
-**You have exactly 10 seconds from when Bacen receives the pacs.008 to when Bacen must receive your pacs.002 response.**
+`MD06` and `FOCR` are **not** pacs.002 codes; `MD06` is a pacs.004 return reason.
 
-If your `pacs.002` arrives after 10 seconds, Bacen automatically generates a rejection with reason code `AB03` (Transaction timed out) and sends it to the originator. Your late response is discarded.
+### The 40-Second Limit (AB03)
 
-This means your entire receive pipeline (polling, parsing, account validation, crediting, response generation, sending) must complete within this window. In practice, aim for **under 5 seconds** to leave margin for network latency and processing variability.
+This is one of the most critical constraints in the Pix protocol (Manual de Tempos do Pix):
 
-The 10-second timeout is the single most common source of failures during homologation and in production. Design your architecture with this constraint as a first-class concern.
+**A Pix on the primary channel must be settled within 40 seconds, counted from `AccptncDtTm` (t0', when the payer's PSP accepted the order) until settlement (t4).** For payments under fraud analysis the count starts at t1' (SPI receipt); scheduled Pix on the secondary channel have 45 minutes.
+
+If the cycle does not complete in time, the SPI rejects the transaction with `AB03` (settlement aborted due to timeout in the SPI) and sends it to both PSPs. A `pacs.002` that arrives after that is useless.
+
+The 40 seconds are shared by everyone in the chain, and the receiving PSP is measured separately. Its time to answer (t3' − t2, from the SPI making the pacs.008 available to the SPI receiving your pacs.002) has service levels of **1.4 s at p50 and 2.3 s at p95**. The payer's PSP has 0.9 s p50 / 1.5 s p95 between accepting the order and the SPI receiving the pacs.008 (t1 − t0').
+
+This means your entire receive pipeline (stream read, parsing, account validation, response generation, sending) must be fast. In practice, aim for well under a second.
+
+Timing is a common source of failures during homologation and in production. Design your architecture with it as a first-class concern.
 
 ## pacs.004 - PaymentReturn (Devolution)
 
-The `pacs.004` is used to return (devolve) a previously settled payment. This is distinct from rejecting a payment (which happens before settlement via `pacs.002` RJCT).
+The `pacs.004` returns (devolves) a previously settled payment. It is sent by the PSP of the original receiver to the SPI. This is distinct from rejecting a payment (which happens before settlement via `pacs.002` RJCT).
 
 ### When Devolutions Occur
 
-- **Customer request**: The creditor's customer asks for a refund (MD06)
-- **Operational error**: The payment was credited to the wrong account (SL02)
-- **Fraud**: The transaction is identified as fraudulent (FRAD)
-- **Original creditor request**: The creditor initiates a return (FOCR)
-
-### D-Prefixed E2E IDs
-
-Devolution messages use a special EndToEndId format that references the original transaction:
-
-**Format**: `D{ISPB 8 digits}{YYYYMMDD}{HHmm}{random}` = **32 characters total**
-
-Note the `D` prefix instead of `E`. This immediately identifies the message as a devolution.
-
-### Return Reason Codes
+The return reason (`RtrRsnInf/Rsn/Cd`) accepts only four codes (`ExternalReturnReason1Code` in the XSD):
 
 | Code | Meaning | Use Case |
 |------|---------|----------|
-| `MD06` | Refund request by end customer | Customer-initiated return |
-| `SL02` | Specific service offered by creditor agent | Operational error correction |
-| `FOCR` | Following cancellation request | Creditor-initiated return |
-| `FRAD` | Fraudulent originated credit transfer | Fraud-related return |
-| `BE08` | Related reference is not unique | Duplicate payment |
+| `BE08` | Bank error | Return by the receiver's PSP under the MED for an operational failure of the payer's PSP, or of its own systems |
+| `FR01` | Fraud | Return by the receiver's PSP under the MED (Mecanismo Especial de Devolução) for well-founded suspicion of fraud |
+| `MD06` | Refund requested by end customer | Return requested by the receiving user |
+| `SL02` | Specific service offered by creditor agent | Return related to Pix Saque or Pix Troco |
+
+`FOCR` and `FRAD` are **not** valid pacs.004 return reasons.
+
+### D-Prefixed Return Ids
+
+The return has its own identifier, `RtrId`, with the same layout as an EndToEndId but a `D` prefix:
+
+**Format**: `D{ISPB of who returns}{yyyyMMddHHmm UTC}{11 alphanumeric}` = **32 characters total**
+
+`OrgnlEndToEndId` keeps the original `E` id unchanged. The toolkit generates `RtrId` with `generateDevolutionEndToEndId`.
 
 ### pacs.004 Structure
 
+Following Bacen's official example (`simulator/spec/spi-5.13.1/exemplos/pacs.004_SPI_1_msg.xml`):
+
 ```xml
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.004.spi.1.13">
-  <PmtRtr>
-    <GrpHdr>
-      <MsgId>{MESSAGE_ID}</MsgId>
-      <CreDtTm>{TIMESTAMP}</CreDtTm>
-      <NbOfTxs>1</NbOfTxs>
-      <SttlmInf>
-        <SttlmMtd>CLRG</SttlmMtd>
-      </SttlmInf>
-    </GrpHdr>
-    <TxInf>
-      <RtrId>{RETURN_E2E_ID}</RtrId>
-      <OrgnlEndToEndId>{ORIGINAL_E2E_ID}</OrgnlEndToEndId>
-      <OrgnlTxId>{ORIGINAL_TX_ID}</OrgnlTxId>
-      <RtrdIntrBkSttlmAmt Ccy="BRL">{RETURN_AMOUNT}</RtrdIntrBkSttlmAmt>
-      <RtrRsnInf>
-        <Rsn>
-          <Prtry>{RETURN_REASON_CODE}</Prtry>
-        </Rsn>
-      </RtrRsnInf>
-    </TxInf>
-  </PmtRtr>
-</Document>
+<Envelope xmlns="https://www.bcb.gov.br/pi/pacs.004/1.5">
+  <AppHdr>
+    <!-- Fr = your ISPB, To = 00038166, MsgDefIdr = pacs.004.spi.1.5 -->
+  </AppHdr>
+  <Document>
+    <PmtRtr>
+      <GrpHdr>
+        <MsgId>{MESSAGE_ID}</MsgId>
+        <CreDtTm>{UTC_TIMESTAMP}</CreDtTm>
+        <NbOfTxs>1</NbOfTxs>
+        <SttlmInf>
+          <SttlmMtd>CLRG</SttlmMtd>
+        </SttlmInf>
+      </GrpHdr>
+      <TxInf>
+        <RtrId>{RETURN_ID}</RtrId>
+        <OrgnlEndToEndId>{ORIGINAL_E2E_ID}</OrgnlEndToEndId>
+        <RtrdIntrBkSttlmAmt Ccy="BRL">{RETURN_AMOUNT}</RtrdIntrBkSttlmAmt>
+        <SttlmPrty>HIGH</SttlmPrty>
+        <ChrgBr>SLEV</ChrgBr>
+        <RtrRsnInf>
+          <Rsn>
+            <Cd>{RETURN_REASON_CODE}</Cd>
+          </Rsn>
+        </RtrRsnInf>
+        <OrgnlTxRef>
+          <DbtrAgt>
+            <FinInstnId>
+              <ClrSysMmbId>
+                <MmbId>{ORIGINAL_PAYER_PSP_ISPB}</MmbId>
+              </ClrSysMmbId>
+            </FinInstnId>
+          </DbtrAgt>
+          <CdtrAgt>
+            <FinInstnId>
+              <ClrSysMmbId>
+                <MmbId>{ORIGINAL_RECEIVER_PSP_ISPB}</MmbId>
+              </ClrSysMmbId>
+            </FinInstnId>
+          </CdtrAgt>
+        </OrgnlTxRef>
+      </TxInf>
+    </PmtRtr>
+  </Document>
+</Envelope>
+```
+
+`OrgnlTxRef` keeps the agents of the **original** transaction: `DbtrAgt` is the original payer's PSP and `CdtrAgt` is the original receiver's PSP (you, when you return).
+
+```typescript
+import { generatePacs004 } from "../scripts/spi/pacs004-generator.js";
+
+const xml = generatePacs004({
+  senderIspb: "12345678",          // original receiver's PSP (you)
+  originalPayerIspb: "99999A03",   // original payer's PSP
+  originalEndToEndId: e2eId,
+  amount: 10.5,
+  returnReasonCode: "MD06",
+});
 ```
 
 ### Devolution Rules
 
 - A payment can be partially or fully returned
-- Multiple partial returns are allowed (up to the original amount)
-- Returns must reference the original transaction's EndToEndId and TxId
-- The return amount cannot exceed the original payment amount minus any previous returns
-- There are time limits for devolutions (varies by return reason: customer-requested returns have different deadlines than fraud-related returns)
+- Multiple partial returns are allowed, but their sum cannot exceed the original amount (the SPI/receiver rejects with `AM09`)
+- A return cannot itself be returned (`AG13`)
+- Returns reference the original transaction by `OrgnlEndToEndId` and the original agents in `OrgnlTxRef`
+- There are time limits for devolutions, which depend on the reason (see the Regulamento Pix; MED returns follow the DICT refund flow)
 
-## Testing with Bacen Virtual Participant (99999004)
+## Homologation Tests (Roteiro, item 2)
 
-The virtual participant `99999004` provides automated responses for SPI testing.
+The Roteiro para Participação Direta no SPI lists the payment and return tests you must pass:
 
-### As Sender (You Send pacs.008 to 99999004)
+| Item | Test |
+|------|------|
+| 2a | Send a pacs.008 on the **primary** channel and receive the SPI pacs.002 confirming settlement |
+| 2b | Receive a pacs.008 on the primary channel and accept it with a pacs.002 |
+| 2c | Send a pacs.008 on the **secondary** channel and receive the SPI pacs.002 confirming settlement |
+| 2d | Receive a pacs.008 on the secondary channel and accept it with a pacs.002 |
+| 2e | Receive a pacs.008 on the primary channel and **reject** it with a pacs.002 and reason code, before the SPI times the transaction out |
+| 2f | Send a pacs.004 and receive the SPI pacs.002 confirming settlement |
+| 2g | Receive a pacs.004 and accept it with a pacs.002 |
+| 2h | Receive a pacs.004 and reject it with a pacs.002 and reason code, before the SPI timeout |
+| 2i–2k | camt.060 balance/entry queries answered with camt.053 (current and previous-day balance) and camt.054 (entry details) |
 
-When you send a `pacs.008` to ISPB `99999004`:
+Item 1 (connectivity) is the pibr.001/pibr.002 echo, and item 3 is the camt.060 → camt.052 statement request plus the file download (see [02 - Basic Connectivity](./02-basic-connectivity.md)).
 
-1. The virtual participant processes the message
-2. It returns a `pacs.002` with status `ACSP` (if the message is valid)
-3. Or it returns a `pacs.002` with status `RJCT` and a reason code (if invalid)
+## Testing with Bacen Virtual Participants
 
-This allows you to test your sending pipeline without needing a partner.
+Bacen provides virtual participants in the homologation environment. The Roteiro names two:
 
-### As Receiver (99999004 Sends pacs.008 to You)
+| ISPB | Name | Behavior |
+|------|------|----------|
+| `99999A04` | Cooperativa de Crédito Virtual | Answers **any** pacs.008 with a pacs.002 `ACSP`, regardless of customer and account data. Use it as the creditor when you test as payer. |
+| `99999A03` | Banco Virtual | The payer in the tests where you receive. Payer: account type `CACC`, branch `1`, account `1`, CPF `11111111111`, name `Fulano`. Receiver (your customer): `CACC`, branch `1`, account `1`, CPF `11111111111`. |
 
-Bacen can trigger the virtual participant to send `pacs.008` messages to your ISPB. You must:
+Note that ISPBs are `[0-9A-Z]{8}`, so your ISPB validation must accept letters. Other virtual ISPBs that circulate in the community (for example for DICT tests) are not in the official documents; confirm them with Bacen before relying on them.
 
-1. Poll and receive the incoming `pacs.008`
+### As Sender (You Send pacs.008 to 99999A04)
+
+When you send a `pacs.008` with `CdtrAgt` = `99999A04` (the `AppHdr/To` is still `00038166`):
+
+1. The SPI makes the order available to the virtual participant
+2. The virtual participant answers `ACSP`
+3. The SPI settles and sends you its `pacs.002` (`ACSC`), or a `pacs.002` `RJCT` if the SPI itself rejected the message (e.g. `AB03`, `RC09`)
+
+ICOM does not validate syntax or signature when you POST (it answers 201 and stores the message); schema and signature errors come back asynchronously as an `admi.002` that references the `PI-ResourceId`. This allows you to test your sending pipeline without needing a partner.
+
+### As Receiver (99999A03 Sends pacs.008 to You)
+
+Bacen (Deban/Gemon) sends `pacs.008` messages with `99999A03` as payer to your ISPB. You must:
+
+1. Read the incoming `pacs.008` from your ICOM stream (`GET /api/v1/out/{ispb}/stream/start`, then `PI-Pull-Next`)
 2. Parse and validate the message
-3. Generate and send a `pacs.002` response (ACSP or RJCT)
-4. Respond within the 10-second timeout
+3. Send a `pacs.002` (ACSP or RJCT) with `POST /api/v1/in/{ispb}/msgs`
+4. Answer well within the 40-second settlement limit (receiver SLA: 1.4 s p50, 2.3 s p95)
 
 This is how Bacen tests your receiving pipeline.
 
+```typescript
+import { IcomClient } from "../scripts/utils/http-client.js";
+
+const icom = new IcomClient({ baseUrl: "https://icom-h.pi.rsfn.net.br:16522", ispb, certPath, keyPath, caPath });
+const received = await icom.readUntil((m) => m.xml.includes("https://www.bcb.gov.br/pi/pacs.008/"), 60_000);
+// ...validate, then answer each one:
+await icom.sendMessages(generatePacs002({ senderIspb: ispb, originalEndToEndId, status: "ACSP" }));
+```
+
 ### Test Scenarios
 
-Bacen provides a detailed test plan with specific scenarios for each message type and local instrument. Each scenario has:
-
-- Specific input data to use
-- Expected outcome (accept, reject with specific code, return)
-- Evidence requirements (screenshots, logs, or message dumps)
-
-Follow the test plan exactly. Do not skip scenarios or improvise test data.
+Follow the Roteiro items above exactly, keep evidence (message dumps, logs) and do not improvise test data. The Roteiro requires keeping the complete test documentation for 5 years.
 
 ## Testing with Partner PSP (Bilateral)
 
-Bilateral testing validates end-to-end behavior between two real institutions.
+Bilateral testing validates end-to-end behavior between two real institutions. The Roteiro does not require it (the official tests run against Bacen and its virtual participants), but in practice it is a useful rehearsal before go-live.
 
 ### Coordination Requirements
 
@@ -387,16 +534,17 @@ Bilateral testing validates end-to-end behavior between two real institutions.
 - Partner sends a `pacs.008` to you; you reject with `pacs.002` RJCT
 - You send a `pacs.004` (return) for a previously settled payment
 - Partner sends a `pacs.004` (return) for a previously settled payment
-- Test with different local instruments (DICT, MANU, QRDN, QRES)
+- Test with different local instruments (MANU, DICT, QRDN, QRES, and INIC/AUTO/APDN/APES if you offer them)
 
 ## Common Errors and Solutions
 
 ### XML Schema Validation Failures
 
-**Symptom**: `pacs.002` with RJCT and reason code indicating schema violation.
+**Symptom**: an `admi.002` from the SPI referencing your message's `PI-ResourceId` (ICOM accepts the POST with 201 and validates later), or an error such as "Schema desconhecido ou não habilitado para uso".
 
-**Solution**: Validate your XML against the official XSD schemas before sending. Common issues:
-- Wrong namespace for the message version
+**Solution**: Validate your XML against the official XSD schemas before sending (copies in `simulator/spec/spi-5.13.1/xsd`; `npm run test:simulator` validates the toolkit's generated messages against them). Common issues:
+- Wrong namespace or `MsgDefIdr` for the message version, or a version not enabled in `GET /api/v1/in/catalog`
+- Date-times without milliseconds or not in UTC (`Z`)
 - Missing required fields
 - Incorrect field ordering (XML element order matters in XSD validation)
 - Invalid characters in text fields
@@ -405,30 +553,34 @@ Bilateral testing validates end-to-end behavior between two real institutions.
 
 **Symptom**: Rejection due to duplicate E2E ID.
 
-**Solution**: Ensure your E2E ID generation uses sufficient randomness. UUID-based random components are recommended. Never reuse E2E IDs, even in the homologation environment.
+**Solution**: Ensure the 11-character suffix is unique within each `yyyyMMddHHmm` (for example a random or sequence-based suffix). Never reuse E2E IDs, even in the homologation environment. Remember the timestamp is UTC.
 
 ### Timeout Failures (AB03)
 
-**Symptom**: Your `pacs.002` responses are not arriving within 10 seconds.
+**Symptom**: The SPI rejects transactions with `AB03` because settlement did not complete within 40 seconds of `AccptncDtTm`, or your answer time (t3' − t2) is above the 1.4 s p50 / 2.3 s p95 service levels.
 
 **Solution**:
 - Profile your receive pipeline to identify bottlenecks
-- Increase polling frequency
-- Process messages asynchronously (do not block the poll loop)
+- Keep read streams permanently open (`/api/v1/out/{ispb}/stream/start` + `PI-Pull-Next`, up to 6 per participant and channel) and use `Accept: multipart/mixed` to get up to 10 messages per read
+- Process messages asynchronously (do not block the read loop), but always finish each stream with `DELETE` on the last `PI-Pull-Next`
 - Reduce database query time for account validation
-- Consider accepting the payment first (ACSP) and performing additional validation asynchronously
+- As payer, set `AccptncDtTm` to the real acceptance time and send the pacs.008 promptly; the clock starts there
 
 ### Incorrect Amount Formatting
 
 **Symptom**: Amount-related rejections.
 
-**Solution**: Amounts must be in BRL with exactly 2 decimal places. Use `0.01` not `0.1` or `1`. No thousands separators. The decimal separator is a period.
+**Solution**: Amounts are in BRL (`Ccy="BRL"`), with at most 2 decimal places (XSD `fractionDigits` 2), no thousands separators, and a period as decimal separator. The toolkit always emits two decimals (`10.50`).
 
 ### BAH Routing Errors
 
 **Symptom**: Message not delivered or rejected by Bacen before reaching the recipient.
 
-**Solution**: Ensure the BAH `Fr` and `To` fields match the actual sender and receiver ISPBs. The `Fr` ISPB must match your certificate's ISPB. The `To` ISPB must be a valid participant.
+**Solution**: `AppHdr/Fr` must be your ISPB (matching your certificate and the `{ispb}` in the URL) and `AppHdr/To` must be the SPI, `00038166`. The counterparty PSP goes only in `DbtrAgt`/`CdtrAgt` inside the Document.
+
+---
+
+**Sources:** [Catálogo de Mensagens e Serviços do SPI 5.13.1](https://www.bcb.gov.br/content/estabilidadefinanceira/cedsfn/Catalogos/spi.5.13.1.zip) (XSDs, examples and rules; copies in `simulator/spec/spi-5.13.1`), [Manual das Interfaces de Comunicação 1.12](https://www.bcb.gov.br/content/estabilidadefinanceira/cedsfn/Manual%20das%20Interfaces%20de%20Comunica%C3%A7%C3%A3o-1.12.pdf), [Manual de Tempos do Pix 7.0](https://www.bcb.gov.br/content/estabilidadefinanceira/pix/Regulamento_Pix/IX_ManualdeTemposdoPix.pdf), [Roteiro para Participação Direta no SPI](https://www.bcb.gov.br/content/estabilidadefinanceira/sistemapagamentosinstantaneos_docs/Roteiro_para_Participacao_Direta_no_SPI_e_abertura_de_Conta_PI.pdf).
 
 ---
 

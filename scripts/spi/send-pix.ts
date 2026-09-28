@@ -1,11 +1,17 @@
 /**
  * Single Pix Payment Sender.
  *
- * Sends a single pacs.008 message to ICOM and waits for the pacs.002 response.
- * Used for:
+ * Sends one pacs.008 to the SPI through ICOM and reads the stream until the
+ * pacs.002 for that EndToEndId arrives. Used for:
  * - SPI functionality testing (basic send/receive)
  * - Verifying connectivity before capacity tests
  * - Debugging individual transactions
+ *
+ * In homologation, ISPB 99999A04 (Bacen's virtual credit union) answers any
+ * HIGH priority pacs.008 with ACSP.
+ *
+ * The SPI settles or rejects within 40s counted from AccptncDtTm (Manual de
+ * Tempos do Pix); after that it rejects with AB03, so this script waits 40s.
  *
  * Usage:
  *   npx tsx scripts/spi/send-pix.ts [amount] [receiverIspb]
@@ -14,6 +20,11 @@
 import { IcomClient, type IcomClientConfig } from "../utils/http-client.js";
 import { generatePacs008, type Pacs008Params } from "./pacs008-generator.js";
 import { generateBankAccount } from "../utils/test-data-generator.js";
+import { generateEndToEndId } from "../utils/endtoendid-generator.js";
+import { generateBizMsgIdr } from "../utils/biz-message-id-generator.js";
+
+/** End-to-end limit of the SPI primary channel. */
+export const SETTLEMENT_LIMIT_MS = 40_000;
 
 interface SendPixConfig {
   icomConfig: IcomClientConfig;
@@ -23,22 +34,41 @@ interface SendPixConfig {
   description?: string;
 }
 
+export interface Pacs002Outcome {
+  status: string;
+  reason?: string;
+  xml: string;
+}
+
+/** Extracts TxSts and the reason code of the pacs.002 for one EndToEndId. */
+export function readPacs002(xml: string, endToEndId: string): Pacs002Outcome | undefined {
+  if (!xml.includes("https://www.bcb.gov.br/pi/pacs.002/")) return undefined;
+  if (!xml.includes(`<OrgnlEndToEndId>${endToEndId}</OrgnlEndToEndId>`)) return undefined;
+  const status = /<TxSts>(\w+)<\/TxSts>/.exec(xml)?.[1] ?? "?";
+  const reason = /<Rsn>\s*<Cd>(\w+)<\/Cd>/.exec(xml)?.[1];
+  return { status, reason, xml };
+}
+
 export async function sendPix(config: SendPixConfig): Promise<{
   endToEndId: string;
   bizMsgIdr: string;
-  sendResponse: { statusCode: number; body: string };
-  pacs002Response?: { statusCode: number; body: string };
+  resourceIds: string[];
+  pacs002?: Pacs002Outcome;
 }> {
   const client = new IcomClient(config.icomConfig);
 
   try {
     const debitAccount = generateBankAccount(config.senderIspb);
     const creditAccount = generateBankAccount(config.receiverIspb);
+    const acceptedAt = new Date();
 
     const params: Pacs008Params = {
       senderIspb: config.senderIspb,
       receiverIspb: config.receiverIspb,
       amount: config.amount,
+      endToEndId: generateEndToEndId(config.senderIspb, acceptedAt),
+      bizMsgIdr: generateBizMsgIdr(config.senderIspb),
+      acceptedAt,
       debitParty: {
         name: debitAccount.holder.name,
         document: debitAccount.holder.document,
@@ -48,7 +78,6 @@ export async function sendPix(config: SendPixConfig): Promise<{
         accountType: debitAccount.accountType,
       },
       creditParty: {
-        name: creditAccount.holder.name,
         document: creditAccount.holder.document,
         documentType: creditAccount.holder.type === "NATURAL_PERSON" ? "CPF" : "CNPJ",
         branch: creditAccount.branch,
@@ -59,48 +88,26 @@ export async function sendPix(config: SendPixConfig): Promise<{
     };
 
     const xml = generatePacs008(params);
+    const endToEndId = params.endToEndId!;
     console.log(`Sending pacs.008 | Amount: R$ ${config.amount.toFixed(2)}`);
-    console.log(`  E2E ID: ${params.endToEndId || "(auto-generated)"}`);
+    console.log(`  E2E ID: ${endToEndId}`);
 
-    const sendResponse = await client.sendMessage(xml);
-    console.log(`  Send response: ${sendResponse.statusCode}`);
+    const { statusCode, resourceIds } = await client.sendMessages(xml);
+    console.log(`  ICOM: ${statusCode} PI-ResourceId=${resourceIds.join(",")}`);
 
-    // Wait for pacs.002 response (poll for up to 15 seconds)
-    let pacs002Response;
-    const deadline = Date.now() + 15000;
+    const remaining = SETTLEMENT_LIMIT_MS - (Date.now() - acceptedAt.getTime());
+    const messages = await client.readUntil((m) => readPacs002(m.xml, endToEndId) !== undefined, remaining);
+    const pacs002 = messages
+      .map((m) => readPacs002(m.xml, endToEndId))
+      .find((o): o is Pacs002Outcome => o !== undefined);
 
-    while (Date.now() < deadline) {
-      try {
-        const pollResponse = await client.pollMessages();
-        if (pollResponse.body && pollResponse.body.includes("pacs.002")) {
-          pacs002Response = pollResponse;
-          console.log(`  pacs.002 received: ${pollResponse.statusCode}`);
-
-          if (pollResponse.body.includes("ACSP")) {
-            console.log("  Status: ACCEPTED");
-          } else if (pollResponse.body.includes("RJCT")) {
-            console.log("  Status: REJECTED");
-          }
-          break;
-        }
-      } catch {
-        // No messages yet, keep polling
-      }
-      await new Promise((r) => setTimeout(r, 1000));
+    if (pacs002) {
+      console.log(`  pacs.002: ${pacs002.status}${pacs002.reason ? ` (${pacs002.reason})` : ""}`);
+    } else {
+      console.log("  WARNING: no pacs.002 within the 40s settlement limit");
     }
 
-    if (!pacs002Response) {
-      console.log("  WARNING: No pacs.002 received within 15s (possible AB03 timeout)");
-    }
-
-    return {
-      endToEndId: params.endToEndId || "auto",
-      bizMsgIdr: params.bizMsgIdr || "auto",
-      sendResponse: { statusCode: sendResponse.statusCode, body: sendResponse.body },
-      pacs002Response: pacs002Response
-        ? { statusCode: pacs002Response.statusCode, body: pacs002Response.body }
-        : undefined,
-    };
+    return { endToEndId, bizMsgIdr: params.bizMsgIdr!, resourceIds, pacs002 };
   } finally {
     client.destroy();
   }
@@ -109,7 +116,7 @@ export async function sendPix(config: SendPixConfig): Promise<{
 // CLI usage
 if (import.meta.url === `file://${process.argv[1]}`) {
   const amount = parseFloat(process.argv[2] || "1.00");
-  const receiverIspb = process.argv[3] || "99999004";
+  const receiverIspb = process.argv[3] || "99999A04";
 
   console.log("=== Send Pix ===\n");
   console.log("This script requires mTLS certificates and ICOM connectivity.");

@@ -25,7 +25,10 @@ function str(name: string, fallback: string): string {
 export const config = {
   /** ISPB do SPI, que e o proprio Bacen (campo To das mensagens). */
   spiIspb: str("SIM_SPI_ISPB", "00038166"),
-  /** ISPB do participante virtual que representa o DICT. */
+  /**
+   * ISPB do participante virtual do DICT. Nao consta em documento oficial;
+   * vem da pratica de homologacao.
+   */
   dictIspb: str("SIM_DICT_ISPB", "99999060"),
 
   /** Porta do gateway ICOM. 16522 e a porta de homologacao real. */
@@ -58,8 +61,10 @@ export const config = {
   },
 
   /**
-   * Limite ponta a ponta da liquidacao no Manual de Tempos do Pix: 40s entre o
-   * aceite do pagador e a liquidacao. Estourado, o SPI rejeita com AB03.
+   * Limite ponta a ponta da liquidacao no Manual de Tempos do Pix 7.0: 40s
+   * contados do AccptncDtTm do pacs.008 (t0') ate a liquidacao (t4). Com
+   * suspeita de fraude (PAGFRD) a contagem comeca no recebimento pelo SPI.
+   * Estourado, o SPI rejeita com AB03.
    */
   settlementTimeoutMs: num("SIM_SETTLEMENT_TIMEOUT_MS", 40_000),
   /** Teto de conexoes simultaneas de leitura por ISPB e canal no ICOM; acima disso, 429. */

@@ -1,21 +1,29 @@
 Step,Phase,Test Case,Direction,Message Type,Expected Result,Status,Notes
-1,Basic Connectivity,ICOM health check,N/A,HTTP GET,200 OK response,TODO,Verify mTLS cert is valid
-2,Basic Connectivity,First pacs.008 send,Send,pacs.008,Message accepted by SPI,TODO,Start with R$ 0.01
-3,Basic Connectivity,First pacs.002 receive,Receive,pacs.002,Status ACSP received,TODO,Must arrive within 10s
-4,Basic Connectivity,Poll for messages,Receive,HTTP GET,Messages retrieved,TODO,Use up to 6 connections
-5,SPI Functionality,Send pacs.008 (MANU),Send,pacs.008,Accepted,TODO,Manual instrument
-6,SPI Functionality,Send pacs.008 (DICT),Send,pacs.008,Accepted,TODO,DICT local instrument
-7,SPI Functionality,Receive pacs.008,Receive,pacs.008,Process and respond,TODO,
-8,SPI Functionality,Send pacs.002 (ACSP),Send,pacs.002,Accepted,TODO,Positive acknowledgment
-9,SPI Functionality,Send pacs.002 (RJCT),Send,pacs.002,Accepted,TODO,With rejection reason
-10,SPI Functionality,Send pacs.004 (MD06),Send,pacs.004,Devolution accepted,TODO,Customer request
-11,SPI Functionality,Send pacs.004 (FRAD),Send,pacs.004,Devolution accepted,TODO,Fraud return
-12,SPI Functionality,Receive pacs.004,Receive,pacs.004,Process devolution,TODO,
-13,SPI Functionality,Version compatibility,Send,pacs.008,Test v1.11/1.12/1.13,TODO,Check which version Bacen accepts
-14,SPI Functionality,Error handling,Send,pacs.008,Handle AB03 timeout,TODO,Simulate slow response
-15,SPI Capacity (Rehearsal),Warm-up test (100 txns),Both,pacs.008/002,All processed,TODO,Before scheduling with Bacen
-16,SPI Capacity (Rehearsal),Sustained rate (500/min),Both,pacs.008/002,Stable throughput,TODO,5-minute test
-17,SPI Capacity,Full capacity test,Both,pacs.008/002,20k in 10min,TODO,Schedule with Bacen
-18,SPI Capacity,Verify sender rate,Send,pacs.008,2000/min sustained,TODO,Monitor with /stats
-19,SPI Capacity,Verify receiver rate,Receive,pacs.008,2000/min sustained,TODO,Respond with pacs.002
-20,SPI Capacity,Post-test validation,N/A,N/A,All txns reconciled,TODO,Verify with Bacen report
+1,Basic Connectivity,mTLS check,N/A,GET /api/v1/in/catalog,200 OK with the enabled messages,TODO,ICOM has no health endpoint; the catalog also shows the enabled versions
+2,Basic Connectivity,Echo (Roteiro 1.a),Send,pibr.001 -> pibr.002,pibr.002 received from the SPI,TODO,Primary channel
+3,Basic Connectivity,Read the stream,Receive,GET /api/v1/out/{ISPB}/stream/start + PI-Pull-Next + DELETE,Messages read and confirmed,TODO,Up to 6 read streams per channel; DELETE the last PI-Pull-Next
+4,Basic Connectivity,First pacs.008 send,Send,pacs.008 (POST /api/v1/in/{ISPB}/msgs),201 + PI-ResourceId,TODO,Practice: start with R$ 0.01 to 99999A04; fund the PI account first
+5,SPI Functionality,Send pacs.008 - primary channel (2.a),Send,pacs.008 -> pacs.002,SPI pacs.002 confirming settlement,TODO,99999A04 answers ACSP
+6,SPI Functionality,Receive pacs.008 and accept - primary (2.b),Receive,pacs.008 -> pacs.002 ACSP,Settled,TODO,Receiver SLA p50 1.4s / p95 2.3s
+7,SPI Functionality,Send pacs.008 - secondary channel (2.c),Send,pacs.008 -> pacs.002,SPI pacs.002 confirming settlement,TODO,icom-sec-h.pi.rsfn.net.br:17522; gzip mandatory
+8,SPI Functionality,Receive pacs.008 and accept - secondary (2.d),Receive,pacs.008 -> pacs.002 ACSP,Settled,TODO,
+9,SPI Functionality,Receive pacs.008 and reject (2.e),Receive,pacs.008 -> pacs.002 RJCT,Rejected with your reason code,TODO,Answer before the SPI times out (40s from AccptncDtTm -> AB03)
+10,SPI Functionality,Send pacs.004 (2.f),Send,pacs.004 -> pacs.002,SPI pacs.002 confirming settlement,TODO,Return reasons: BE08 / FR01 / MD06 / SL02
+11,SPI Functionality,Receive pacs.004 and accept (2.g),Receive,pacs.004 -> pacs.002 ACSP,Settled,TODO,
+12,SPI Functionality,Receive pacs.004 and reject (2.h),Receive,pacs.004 -> pacs.002 RJCT,Rejected with reason code,TODO,Before the SPI timeout
+13,SPI Functionality,Current balance (2.i),Send,camt.060 -> camt.053,Current balance received,TODO,
+14,SPI Functionality,Previous-day closing balance (2.j),Send,camt.060 -> camt.053,Closing balance received,TODO,
+15,SPI Functionality,Entry details (2.k),Send,camt.060 -> camt.054,Entry details received,TODO,
+16,SPI Functionality,List of entries (3.a/3.b),Send,camt.060 -> camt.052 + ARQ download,File downloaded,TODO,ARQ keeps files for 24h
+17,SPI Functionality,Liquidity via STR (4),Both,LPI0001 / LPI0003 (LPI0002/0004/0005/0006 if applicable),Transfers confirmed,TODO,Non-STR participants use STR-Web
+18,SPI Functionality,Rediscount via Selic (5),Send,SEL1009 / SEL1016,Operations confirmed,TODO,Or email spi@bcb.gov.br declining it
+19,SPI Functionality,Settlement service for indirects (6),Send,reda.014 / reda.031 -> reda.016,Confirmed,TODO,Or email spi@bcb.gov.br declining it
+20,SPI Functionality,Contacts and notices (8),Both,reda.022 -> reda.016; admi.004,Contacts registered; notice handled,TODO,
+21,SPI Functionality,SPB-Web2 block/unblock (9),N/A,SPI module of SPB-Web2,Sending blocked and unblocked,TODO,
+22,SPI Functionality,Message versions,Send,pacs.008 / pacs.002 / pacs.004,Accepted,TODO,Use the versions enabled in GET /api/v1/in/catalog (catalog 5.13: 1.16 / 1.17 / 1.5)
+23,SPI Capacity (Rehearsal),Warm-up,Both,pacs.008/002,All processed,TODO,Practice: before scheduling with Bacen
+24,SPI Capacity (Rehearsal),Full-rate rehearsal,Both,pacs.008/002,Stable at your tier rate,TODO,Practice: 10 min at 1000 / 2000 / 4000 per min
+25,SPI Capacity,Schedule (7),N/A,Email spi@bcb.gov.br,One-hour window booked,TODO,9h/10h/13h/14h/20h/21h/22h on business days
+26,SPI Capacity,Payer test (7.a),Send,pacs.008 HIGH to 99999A04,10k / 20k / 40k in 10 min settled,TODO,>=99% of SPI pacs.002 consumed within 200 ms
+27,SPI Capacity,Receiver test (7.b),Receive,pacs.008 HIGH from 99999A03 -> pacs.002 ACSP,Same volume accepted without rejection,TODO,>=99% consumed within 200 ms; >=50% within 1.4s and >=95% within 2.3s
+28,SPI Capacity,Post-test,N/A,N/A,Result informed by Deban/Gemon,TODO,Keep the test documentation for 5 years

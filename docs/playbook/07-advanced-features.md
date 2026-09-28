@@ -26,14 +26,14 @@ A static QR code contains payment information directly encoded in the EMV TLV pa
 - Contains the Pix key directly in the payload
 - Amount may or may not be specified
 - No expiration
-- No unique transaction identifier
+- Optional `txid` in 62-05 (`***` when there is none)
 - Simplest to implement
 
 **EMV Payload Structure (Static):**
 
 ```
 00 02 "01"                          // Payload Format Indicator
-01 02 "12"                          // Point of Initiation: "12" = static
+01 02 "12"                          // Optional: "12" = must not be paid more than once (usually omitted in static QRs)
 26 XX                               // Merchant Account Information (Pix)
    00 14 "br.gov.bcb.pix"           // GUI
    01 XX "{pix_key}"                // Pix Key
@@ -55,7 +55,7 @@ A COB creates a unique charge with a specific amount and optional expiration. Th
 **Characteristics:**
 - Each charge has a unique `txid`
 - Contains a URL (Location) instead of direct payment data
-- Amount is specified and fixed
+- Amount and `txid` come from the JSON behind the URL, not from the EMV payload
 - Has an expiration time
 - Single-use
 
@@ -71,13 +71,12 @@ PATCH /api/v2/cob/{txid}  // Update a COB
 
 ```
 00 02 "01"                          // Payload Format Indicator
-01 02 "12"                          // Point of Initiation: "12" = dynamic
+01 02 "12"                          // Optional: "12" = must not be paid more than once (recommended for COB)
 26 XX                               // Merchant Account Information (Pix)
    00 14 "br.gov.bcb.pix"           // GUI
-   25 XX "{location_url}"           // URL for charge details
+   25 XX "{location_url}"           // URL for charge details, without "https://"
 52 04 "0000"                        // Merchant Category Code
 53 03 "986"                         // Transaction Currency (BRL)
-54 XX "{amount}"                    // Transaction Amount
 58 02 "BR"                          // Country Code
 59 XX "{merchant_name}"             // Merchant Name
 60 XX "{merchant_city}"             // Merchant City
@@ -207,7 +206,8 @@ This is expected if you have not been authorized for these services. Skip these 
 **QR Code with amount vs. without:**
 - Static QR codes may or may not include an amount
 - If no amount is specified, the payer enters the amount
-- Dynamic QR codes (COB/COBV) always have an amount
+- Dynamic QR codes (COB/COBV) carry the amount in the JSON payload behind the URL
+- Having an amount does not make a QR single-use; only ID 01 = "12" does
 
 **URL encoding in dynamic QR codes:**
 - The Location URL must be properly encoded in the EMV payload
@@ -254,41 +254,37 @@ Pix Automatico enables scheduled recurring payments, similar to direct debit but
 
 ---
 
-## MED 2.0 (Enhanced Fraud Detection)
+## MED 2.0 (Funds Recovery)
 
-MED 2.0 is an evolution of the Mecanismo Especial de Devolucao, introducing faster fraud response times and enhanced fraud markers.
+MED 2.0 is an evolution of the Mecanismo Especial de Devolucao. In the DICT API 2.12.1 it appears as **funds recovery** (`/funds-recoveries/`): the payer's PSP of the fraudulent (root) transaction creates a funds recovery, and the DICT traces the money through subsequent transactions and commands balance blocks automatically.
 
-### Key Improvements Over MED 1.0
+### Funds Recovery Flow (DICT API 2.12.1)
 
-| Aspect | MED 1.0 | MED 2.0 |
-|--------|---------|---------|
-| Resolution time | 7 days | Shorter (near real-time for some flows) |
-| Fraud markers | Basic | Enhanced with more granular categories |
-| Automation | Manual review | More automated decision flows |
-| Scope | Original transaction only | Can trace through multiple hops |
+The funds recovery goes through these states:
 
-### New Fields and Faster Resolution
+| State | Meaning |
+|-------|---------|
+| `CREATED` | Created by the payer's PSP of the root transaction; an infraction report for the root transaction is generated immediately |
+| `TRACKED` | The DICT built the transaction tracking graph (MED 2.0) and prioritised paths for blocking |
+| `AWAITING_ANALYSIS` | Infraction reports were generated for the suspect transactions; each receiving PSP must block the balance and analyse its transaction |
+| `ANALYSED` | All infraction reports were analysed and closed |
+| `REFUNDING` | The creator started the refunds (only if the root infraction report was not closed as `DISAGREED`) |
+| `COMPLETED` / `CANCELLED` | Finished |
 
-- **Enhanced fraud categories:** More specific fraud type indicators
-- **Automated blocking:** Immediate precautionary blocking of suspected fraudulent accounts
-- **Multi-hop tracing:** When funds are moved through multiple accounts, MED 2.0 can trace and recover across the chain
-- **Faster notification:** Near real-time notification of fraud markers to all participating PSPs
+Depending on the transaction, a funds recovery may skip the tracking step and go straight to analysis.
 
 ### Integration with DICT Fraud Markers
 
-When a MED 2.0 infraction is confirmed:
-1. A fraud marker is created in DICT
-2. The marker is associated with the account holder's CPF/CNPJ
-3. All PSPs can see the fraud marker when performing key lookups
-4. PSPs should use fraud markers in their risk assessment for outgoing payments
-5. Multiple confirmed infractions increase the fraud risk score
+- Closing an infraction report with agreement from the counterparty automatically creates a fraud marker
+- A PSP creates a fraud marker directly (`POST /fraud-markers/`) only for fraud in transactions settled outside the SPI or rejected; to mark another PSP's user and recover funds settled in the SPI, use an infraction report
+- Fraud markers feed counters returned by the statistics endpoints (`GET /entries/{Key}/statistics`, `GET /persons/{TaxIdNumber}/statistics`); cancelling a marker decreases them
+- PSPs should use these statistics in their risk assessment for outgoing payments
 
 ### Implementation Notes
 
-- Monitor Bacen circulars for MED 2.0 rollout timeline
-- Update infraction report handling to support new fields
-- Implement automated responses where appropriate
-- Ensure fraud marker data is integrated into your risk engine
+- Monitor Bacen's regulation for the MED 2.0 rollout timeline and deadlines (not covered by the sources used here)
+- Receiving PSPs must react to infraction reports generated by a funds recovery: block the balance, analyse and close
+- Ensure fraud marker statistics are integrated into your risk engine
 
 ---
 
@@ -315,6 +311,8 @@ For initial homologation as a Direct Participant, focus on:
 1. **QR Codes (Static, COB, COBV)** -- Required for homologation
 2. **MED / Infraction Reports** -- Required for homologation (covered in DICT functionality)
 3. **Pix Automatico** -- Check with Bacen if required for your timeline
-4. **MED 2.0** -- Implement as Bacen publishes requirements
+4. **MED 2.0 (funds recovery)** -- Already in the DICT API 2.12.1 (`/funds-recoveries/`); check the deadlines in the regulation
 
 Features like Pix Offline and Cross-Border Pix are future considerations and not part of current homologation requirements.
+
+Sources: [DICT API 2.12.1](https://www.bcb.gov.br/content/estabilidadefinanceira/pix/API-DICT.html) (funds recovery, fraud markers, statistics). The QR code rules follow the Manual de Padrões para Iniciação do Pix, as implemented in `scripts/qrcode/qr-generator.ts`; the Pix Automático and Pix Tester notes come from practical experience and were not checked against official sources here.

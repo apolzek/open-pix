@@ -184,7 +184,7 @@ export function generateBacenDictPhones(count: number, startIndex = 0): string[]
 // CLI usage
 if (import.meta.url === `file://${process.argv[1]}`) {
   const ispb = process.argv[2] || "12345678";
-  const partnerIspb = process.argv[3] || "99999004";
+  const partnerIspb = process.argv[3] || "99999A04";
   const count = parseInt(process.argv[4] || "3", 10);
 
   console.log(`=== Test Data Generator (ISPB: ${ispb}) ===\n`);

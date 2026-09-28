@@ -6,13 +6,14 @@
   },
   "icom": {
     "baseUrl": "https://icom-h.pi.rsfn.net.br:16522",
-    "pollPath": "/api/v1/in/{ispb}/msgs",
-    "sendPath": "/api/v1/out/{ispb}/msgs",
-    "maxPollConnections": 6,
-    "pollIntervalMs": 1000
+    "secondaryBaseUrl": "https://icom-sec-h.pi.rsfn.net.br:17522",
+    "sendPath": "/api/v1/in/{ispb}/msgs",
+    "streamStartPath": "/api/v1/out/{ispb}/stream/start",
+    "maxReadStreams": 6,
+    "maxMessagesPerRequest": 10
   },
   "dict": {
-    "baseUrl": "https://dict-h.pi.rsfn.net.br",
+    "baseUrl": "https://dict-h.pi.rsfn.net.br:16522",
     "apiVersion": "v2"
   },
   "mtls": {
@@ -22,8 +23,9 @@
     "passphrase": ""
   },
   "bacen": {
-    "spiIspb": "99999004",
-    "dictIspb": "99999060"
+    "spiIspb": "00038166",
+    "virtualCreditorIspb": "99999A04",
+    "virtualDebtorIspb": "99999A03"
   },
   "partner": {
     "ispb": "",

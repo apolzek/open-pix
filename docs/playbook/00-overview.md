@@ -14,19 +14,19 @@ Homologation is structured into sequential phases. Each phase must be completed 
 
 ### Phase 1: Basic Connectivity
 
-Establish your connection to Bacen's ICOM messaging API over the RSFN (Rede do Sistema Financeiro Nacional). This phase validates that your infrastructure can authenticate via mTLS, send messages, and poll for responses. You will send and receive your first test transactions (typically a R$ 0.01 payment).
+Establish your connection to Bacen's ICOM messaging API over the RSFN (Rede do Sistema Financeiro Nacional). This phase validates that your infrastructure can authenticate via mTLS, send messages, and read the ICOM message stream. The formal connectivity test in the Roteiro is an echo: send a `pibr.001` on the primary channel and receive the `pibr.002` from the SPI. After that, most teams send their first small test payment (typically R$ 0.01).
 
 **Typical duration:** 2-4 weeks
 
 ### Phase 2: SPI Functionality
 
-Execute the full suite of SPI (Sistema de Pagamentos Instantaneos) functional test cases. This covers payment initiation (`pacs.008`), payment status reporting (`pacs.002`), and payment returns/devolutions (`pacs.004`). You must demonstrate correct handling of all local instruments (MANU, DICT, QRDN, QRES, INIC), proper error handling, timeout management, and multi-version message support.
+Execute the full suite of SPI (Sistema de Pagamentos Instantaneos) functional test cases. This covers payment initiation (`pacs.008`), payment status reporting (`pacs.002`), and payment returns/devolutions (`pacs.004`). The Roteiro (item 2) requires sending and receiving `pacs.008` on the primary and secondary channels, rejecting an incoming `pacs.008` and `pacs.004` with a `pacs.002` before the SPI times out, sending and receiving `pacs.004`, and balance/statement queries (`camt.060` → `camt.053`/`camt.054`/`camt.052`). In practice you should also exercise every local instrument you will support (MANU, DICT, QRDN, QRES, INIC, AUTO, APDN, APES) and your error handling.
 
 **Typical duration:** 3-5 weeks
 
 ### Phase 3: SPI Capacity
 
-Prove your system can handle Bacen's throughput requirements under load. The current requirement is **20,000 transactions processed in 10 minutes** (approximately 2,000 per minute), operating as both sender and receiver simultaneously. Bacen schedules this test and monitors it in real time.
+Prove your system can handle Bacen's throughput requirements under load. The Roteiro (item 7) sets the volume by PSP size, sent **and** received simultaneously over 10 minutes: **10,000** messages (up to 1M accounts, 1,000/min), **20,000** (up to 10M accounts, 2,000/min) or **40,000** (above 10M accounts, 4,000/min). You must also consume at least 99% of the messages the SPI makes available within 200 ms and, as receiver, accept at least 50% of the payments within 1.4s and 95% within 2.3s. Bacen schedules this test (a one-hour window requested by email to spi@bcb.gov.br) and monitors it in real time.
 
 **Typical duration:** 1-2 weeks (plus rehearsal time)
 
@@ -90,7 +90,7 @@ The Pix key directory. DICT maps Pix keys (CPF, CNPJ, phone, email, random/EVP) 
 
 ### ICOM (Interface de Comunicacao)
 
-The messaging interface for SPI. ICOM is a polling-based HTTP API (not webhooks or push notifications) that participants use to send and receive ISO 20022 messages. You send messages via HTTP POST and poll for incoming messages via HTTP GET. ICOM runs over the RSFN network with mTLS authentication.
+The messaging interface for SPI. ICOM is a pull-based HTTP API (not webhooks or push notifications) that participants use to send and receive ISO 20022 messages. You send messages with `POST /api/v1/in/{ispb}/msgs` ("in" = into the SPI) and read incoming messages from a long-polling stream: `GET /api/v1/out/{ispb}/stream/start`, then GET each `PI-Pull-Next` returned, and finally `DELETE` the last `PI-Pull-Next` to confirm the reads. ICOM runs over the RSFN network with mTLS authentication.
 
 ### RSFN (Rede do Sistema Financeiro Nacional)
 
@@ -100,20 +100,19 @@ The dedicated private network that connects financial institutions to Bacen's sy
 
 Bacen operates two distinct environments:
 
-### Homologation Environment (HPIX / PPIX)
+### Homologation Environment
 
-- **HPIX**: The primary homologation environment where most testing occurs
-- **PPIX**: Pre-production environment used for final validation before go-live
-- ICOM URL: `https://icom-h.pi.rsfn.net.br:16522/api/v1/...`
-- DICT URL: `https://dict-h.pi.rsfn.net.br/api/v2/...`
+- ICOM URL: `https://icom-h.pi.rsfn.net.br:16522/api/v1/...` (secondary channel: `https://icom-sec-h.pi.rsfn.net.br:17522`)
+- DICT URL: `https://dict-h.pi.rsfn.net.br:16522/api/v2/...`
+- The ICOM manual and the Roteiro only distinguish homologation and production; names like "HPIX"/"PPIX" that you may hear are informal and not defined in those documents
 - Uses separate certificates from production
 - Transactions use test data and do not move real money
 - Bacen virtual participants are available for testing
 
 ### Production Environment
 
-- ICOM URL: `https://icom.pi.rsfn.net.br:16522/api/v1/...`
-- DICT URL: `https://dict.pi.rsfn.net.br/api/v2/...`
+- ICOM URL: `https://icom.pi.rsfn.net.br:16422/api/v1/...` (secondary channel: `https://icom-sec.pi.rsfn.net.br:17422`)
+- DICT URL: `https://dict.pi.rsfn.net.br:16422/api/v2/...`
 - Real transactions, real money
 - Only accessible after full homologation approval
 
@@ -123,10 +122,12 @@ During homologation, Bacen provides virtual participants that simulate the behav
 
 | Virtual Participant | ISPB | Purpose |
 |---------------------|------|---------|
-| SPI Virtual Participant | **99999004** | Simulates a counterparty for SPI transactions (pacs.008, pacs.002, pacs.004) |
-| DICT Virtual Participant | **99999060** | Simulates a counterparty for DICT operations (key lookups, claims) |
+| Cooperativa de Crédito Virtual | **99999A04** | Creditor for your outgoing tests: answers any `pacs.008` with a `pacs.002` `ACSP`, regardless of the customer and account data |
+| Banco Virtual | **99999A03** | Payer in the receiving tests: Bacen sends you `pacs.008` from it (payer CACC, branch 1, account 1, CPF 11111111111, name "Fulano") |
 
-The virtual participants have predefined behaviors. For example, sending a `pacs.008` to ISPB `99999004` will result in an automatic `pacs.002` response (acceptance or rejection depending on the test scenario). This allows you to develop and test without depending on external partners for every iteration.
+Both ISPBs come from the Roteiro para Participação Direta no SPI. ISPBs are `[0-9A-Z]{8}`, so the letter `A` is valid. A DICT virtual participant (the number `99999060` circulates among teams) does not appear in the official documents we checked; confirm with Bacen before relying on it.
+
+The virtual participants have predefined behaviors. For example, sending a `pacs.008` with priority HIGH to ISPB `99999A04` results in an automatic `ACSP` `pacs.002`, followed by the SPI's settlement confirmation. This allows you to develop and test without depending on external partners for every iteration.
 
 ## Role of Partner PSPs for Bilateral Testing
 
@@ -153,15 +154,17 @@ The payment initiation message. Sent from the debtor's institution to the credit
 
 ### pacs.002 - PaymentStatusReport
 
-The payment status response. Sent by the creditor's institution back to the debtor's institution (via Bacen) to accept or reject an incoming payment. An `ACSP` (Accepted Settlement in Process) status means the payment is accepted. An `RJCT` (Rejected) status includes a reason code explaining why.
+The payment status response. The creditor's institution sends it to the SPI to accept (`ACSP`, Accepted Settlement in Process) or reject (`RJCT`, with a reason code) an incoming payment. The SPI then settles and sends its own `pacs.002` to both institutions: `ACSC` to the payer's PSP, `ACCC` to the receiver's PSP, or `RJCT`. If the Pix is not settled within 40 seconds of the payer's acceptance (`AccptncDtTm`), the SPI rejects it with `AB03`.
 
 ### pacs.004 - PaymentReturn
 
-The devolution/return message. Used to return a previously settled payment, either partially or fully. Common scenarios include: customer-requested returns, fraud-related returns, and operational error corrections. Return messages reference the original transaction's end-to-end ID.
+The devolution/return message. Used to return a previously settled payment, either partially or fully. The only return reasons are `BE08` (bank error), `FR01` (fraud, MED), `MD06` (requested by the receiving user) and `SL02` (Pix Saque/Troco). Return messages carry a new `RtrId` (prefix `D`) and reference the original transaction's end-to-end ID in `OrgnlEndToEndId`.
 
 ### Business Application Header (BAH)
 
-Every SPI message is wrapped in a BAH envelope that contains routing metadata: sender ISPB, receiver ISPB, message definition identifier, business message identifier (BizMsgIdr), and creation timestamp. The BAH is critical for correct message routing and must be properly constructed.
+Every SPI message is wrapped in an `<Envelope>` whose default namespace identifies the message and its version (e.g. `https://www.bcb.gov.br/pi/pacs.008/1.16`), with an `<AppHdr>` and a `<Document>`. The AppHdr contains sender (`Fr`) and receiver (`To`), message definition identifier (`MsgDefIdr`, e.g. `pacs.008.spi.1.16`), business message identifier (`BizMsgIdr`), creation timestamp (`CreDt`, UTC) and the XMLDSig signature (`Sgntr`). A PSP always sends to the SPI (`To` = `00038166`) and receives from it; the counterparty PSP only appears inside the Document (`DbtrAgt`/`CdtrAgt`).
+
+Sources: [Roteiro para Participação Direta no SPI](https://www.bcb.gov.br/content/estabilidadefinanceira/sistemapagamentosinstantaneos_docs/Roteiro_para_Participacao_Direta_no_SPI_e_abertura_de_Conta_PI.pdf), [ICOM manual 1.12](https://www.bcb.gov.br/content/estabilidadefinanceira/cedsfn/Manual%20das%20Interfaces%20de%20Comunica%C3%A7%C3%A3o-1.12.pdf), [Manual de Tempos do Pix](https://www.bcb.gov.br/content/estabilidadefinanceira/pix/Regulamento_Pix/IX_ManualdeTemposdoPix.pdf), [SPI catalog 5.13.1](https://www.bcb.gov.br/content/estabilidadefinanceira/cedsfn/Catalogos/spi.5.13.1.zip), [DICT API](https://www.bcb.gov.br/content/estabilidadefinanceira/pix/API-DICT.html).
 
 ---
 

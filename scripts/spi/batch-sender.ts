@@ -17,7 +17,7 @@
  */
 
 import http from "node:http";
-import { generatePacs008, type Pacs008Params, type PacsVersion } from "./pacs008-generator.js";
+import { generatePacs008, type Pacs008Params } from "./pacs008-generator.js";
 import { IcomClient } from "../utils/http-client.js";
 import { generateBankAccount } from "../utils/test-data-generator.js";
 
@@ -81,7 +81,6 @@ function createServer(client: IcomClient, senderIspb: string, receiverIspb: stri
 
         const params = body ? JSON.parse(body) : {};
         const amount = params.amount || (Math.floor(Math.random() * 10000) + 1) / 100;
-        const version: PacsVersion = params.version || "1.13";
 
         const debitAccount = generateBankAccount(senderIspb);
         const creditAccount = generateBankAccount(receiverIspb);
@@ -90,7 +89,6 @@ function createServer(client: IcomClient, senderIspb: string, receiverIspb: stri
           senderIspb,
           receiverIspb,
           amount,
-          version,
           debitParty: {
             name: debitAccount.holder.name,
             document: debitAccount.holder.document,
@@ -100,7 +98,6 @@ function createServer(client: IcomClient, senderIspb: string, receiverIspb: stri
             accountType: debitAccount.accountType,
           },
           creditParty: {
-            name: creditAccount.holder.name,
             document: creditAccount.holder.document,
             documentType: creditAccount.holder.type === "NATURAL_PERSON" ? "CPF" : "CNPJ",
             branch: creditAccount.branch,
@@ -110,11 +107,12 @@ function createServer(client: IcomClient, senderIspb: string, receiverIspb: stri
         };
 
         const xml = generatePacs008(pacs008Params);
-        const response = await client.sendMessage(xml, `pacs.008.spi.${version}`);
+        // 201 means ICOM stored the message; settlement comes later in pacs.002.
+        const response = await client.sendMessages(xml);
 
         stats.sent++;
 
-        if (response.statusCode >= 200 && response.statusCode < 300) {
+        if (response.statusCode === 201) {
           stats.accepted++;
         } else {
           stats.rejected++;
@@ -123,11 +121,13 @@ function createServer(client: IcomClient, senderIspb: string, receiverIspb: stri
         res.writeHead(response.statusCode, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
           status: response.statusCode,
+          resourceIds: response.resourceIds,
           sent: stats.sent,
         }));
       } catch (err) {
         stats.errors++;
-        res.writeHead(500, { "Content-Type": "application/json" });
+        const status = (err as { statusCode?: number }).statusCode ?? 500;
+        res.writeHead(status, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: (err as Error).message }));
       }
       return;
@@ -154,7 +154,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
 
   const senderIspb = process.env.PSP_ISPB!;
-  const receiverIspb = process.env.BACEN_SPI_ISPB || "99999004";
+  const receiverIspb = process.env.BACEN_VIRTUAL_CREDITOR_ISPB || "99999A04";
 
   const client = new IcomClient({
     baseUrl: process.env.ICOM_BASE_URL || "https://icom-h.pi.rsfn.net.br:16522",

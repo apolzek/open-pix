@@ -1,131 +1,115 @@
 /**
  * pacs.002 (FIToFIPaymentStatusReport) XML Generator.
  *
- * Generates status response messages for incoming pacs.008 payments.
- * A pacs.002 must be sent back within ~10 seconds of receiving a pacs.008,
- * otherwise the SPI will automatically reject with AB03 (timeout).
+ * The receiving PSP answers each pacs.008 with a pacs.002 addressed to the
+ * SPI (catalog 5.13, pacs.002.spi.1.17). The SPI then settles and sends its
+ * own pacs.002 (ACSC or RJCT) to both PSPs.
  *
- * Status codes:
- * - ACSP: Accepted Settlement in Process (positive ack)
- * - RJCT: Rejected (with reason code)
+ * Timing (Manual de Tempos do Pix 7.0):
+ * - The whole cycle has a 40s limit counted from AccptncDtTm (t0') until
+ *   settlement (t4). Past that, the SPI rejects with AB03 and the late
+ *   pacs.002 is useless.
+ * - The receiving PSP is measured on t3' - t2: 1.4s at p50 and 2.3s at p95.
+ *   Aim for well under a second.
  *
- * Common rejection codes:
- * - AB09: Invalid account
- * - AG03: Account blocked/inactive
- * - AM02: Amount exceeds limit
- * - BE01: Invalid beneficiary info
- * - DS04: Order rejected
- * - MD01: No mandate
- * - SL02: Specific service offered by Creditor Agent
+ * Status sent by the receiving PSP:
+ * - ACSP: accepted, settlement in process
+ * - RJCT: rejected, with a reason code from ExternalStatusReason1Code
+ *
+ * Common rejection codes (full list in the XSD):
+ * - AC03: invalid creditor account number
+ * - AC06: blocked account
+ * - AC07: closed account
+ * - AG03: transaction type not supported
+ * - AM18: invalid number of transactions
+ * - BE01: creditor document inconsistent with the account
+ * - DS04: order rejected by the creditor PSP
+ * - FRAD: fraud
+ * - SL02: specific service not offered
  */
 
 import { generateBizMsgIdr } from "../utils/biz-message-id-generator.js";
+import { END_TO_END_ID_PATTERN } from "../utils/endtoendid-generator.js";
+import { SPI_ISPB, buildEnvelope, escapeXml, isoUtc } from "./spi-envelope.js";
 
-export type Pacs002Status = "ACSP" | "RJCT";
+export type Pacs002Status = "ACSP" | "RJCT" | "ACSC" | "ACCC";
 
 export interface Pacs002Params {
+  /** ISPB of the PSP answering (AppHdr/Fr). */
   senderIspb: string;
-  receiverIspb: string;
+  /** Receiver of this message. For a PSP it is always the SPI. */
+  receiverIspb?: string;
   originalEndToEndId: string;
-  originalBizMsgIdr: string;
+  /**
+   * OrgnlInstrId. For a normal Pix it repeats the EndToEndId; it differs
+   * only when the original instruction has its own InstrId.
+   */
+  originalInstructionId?: string;
   status: Pacs002Status;
   rejectReasonCode?: string;
+  additionalInfo?: string;
   bizMsgIdr?: string;
 }
 
-function isoDateTime(): string {
-  return new Date().toISOString().replace(/\.\d+Z$/, "Z");
-}
-
 export function generatePacs002(params: Pacs002Params): string {
+  if (!END_TO_END_ID_PATTERN.test(params.originalEndToEndId)) {
+    throw new Error(`Invalid OrgnlEndToEndId: ${params.originalEndToEndId}`);
+  }
+  if (params.status === "RJCT" && !params.rejectReasonCode) {
+    throw new Error("RJCT requires rejectReasonCode");
+  }
+  if (params.additionalInfo !== undefined && params.additionalInfo.length > 105) {
+    throw new Error("AddtlInf must have up to 105 chars");
+  }
+
   const bizMsgIdr = params.bizMsgIdr || generateBizMsgIdr(params.senderIspb);
-  const creationDateTime = isoDateTime();
+  const createdAt = isoUtc();
 
-  const statusInfo = params.status === "RJCT"
-    ? `
-          <TxInfAndSts>
-            <OrgnlEndToEndId>${params.originalEndToEndId}</OrgnlEndToEndId>
-            <TxSts>${params.status}</TxSts>
-            <StsRsnInf>
-              <Rsn>
-                <Cd>${params.rejectReasonCode || "DS04"}</Cd>
-              </Rsn>
-            </StsRsnInf>
-          </TxInfAndSts>`
-    : `
-          <TxInfAndSts>
-            <OrgnlEndToEndId>${params.originalEndToEndId}</OrgnlEndToEndId>
-            <TxSts>${params.status}</TxSts>
-          </TxInfAndSts>`;
+  const reason =
+    params.status === "RJCT"
+      ? `
+        <StsRsnInf>
+            <Rsn>
+                <Cd>${params.rejectReasonCode}</Cd>
+            </Rsn>${params.additionalInfo ? `
+            <AddtlInf>${escapeXml(params.additionalInfo)}</AddtlInf>` : ""}
+        </StsRsnInf>`
+      : "";
 
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<Envelope xmlns="urn:iso:std:iso:20022:tech:xsd:envelope:1">
-  <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.02">
-    <Fr>
-      <FIId>
-        <FinInstnId>
-          <Othr>
-            <Id>${params.senderIspb.padStart(8, "0")}</Id>
-          </Othr>
-        </FinInstnId>
-      </FIId>
-    </Fr>
-    <To>
-      <FIId>
-        <FinInstnId>
-          <Othr>
-            <Id>${params.receiverIspb.padStart(8, "0")}</Id>
-          </Othr>
-        </FinInstnId>
-      </FIId>
-    </To>
-    <BizMsgIdr>${bizMsgIdr}</BizMsgIdr>
-    <MsgDefIdr>pacs.002.spi.1.13</MsgDefIdr>
-    <CreDt>${creationDateTime}</CreDt>
-  </AppHdr>
-  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.14.spi.1.13">
-    <FIToFIPmtStsRpt>
-      <GrpHdr>
+  const document = `<FIToFIPmtStsRpt>
+    <GrpHdr>
         <MsgId>${bizMsgIdr}</MsgId>
-        <CreDtTm>${creationDateTime}</CreDtTm>
-      </GrpHdr>
-      <OrgnlGrpInfAndSts>
-        <OrgnlMsgId>${params.originalBizMsgIdr}</OrgnlMsgId>
-        <OrgnlMsgNmId>pacs.008.spi.1.13</OrgnlMsgNmId>
-      </OrgnlGrpInfAndSts>${statusInfo}
-    </FIToFIPmtStsRpt>
-  </Document>
-</Envelope>`;
+        <CreDtTm>${createdAt}</CreDtTm>
+    </GrpHdr>
+    <TxInfAndSts>
+        <OrgnlInstrId>${params.originalInstructionId ?? params.originalEndToEndId}</OrgnlInstrId>
+        <OrgnlEndToEndId>${params.originalEndToEndId}</OrgnlEndToEndId>
+        <TxSts>${params.status}</TxSts>${reason}
+    </TxInfAndSts>
+</FIToFIPmtStsRpt>`;
+
+  return buildEnvelope({
+    type: "pacs.002",
+    from: params.senderIspb,
+    to: params.receiverIspb ?? SPI_ISPB,
+    bizMsgIdr,
+    createdAt,
+    document,
+  });
 }
 
 // CLI usage
 if (import.meta.url === `file://${process.argv[1]}`) {
   const senderIspb = process.argv[2] || "12345678";
-  const receiverIspb = process.argv[3] || "99999004";
-  const status = (process.argv[4] as Pacs002Status) || "ACSP";
+  const status = (process.argv[3] as Pacs002Status) || "ACSP";
+  const originalEndToEndId = process.argv[4] || "E99999A0420260928143512345678900";
 
-  console.log("=== pacs.002 - Accepted ===\n");
   console.log(
     generatePacs002({
       senderIspb,
-      receiverIspb,
-      originalEndToEndId: "E1234567820240115143500000000001A",
-      originalBizMsgIdr: "M12345678abcDEF01234567890123456",
-      status: "ACSP",
+      originalEndToEndId,
+      status,
+      rejectReasonCode: status === "RJCT" ? "AC03" : undefined,
     }),
   );
-
-  if (status === "RJCT") {
-    console.log("\n=== pacs.002 - Rejected ===\n");
-    console.log(
-      generatePacs002({
-        senderIspb,
-        receiverIspb,
-        originalEndToEndId: "E1234567820240115143500000000001A",
-        originalBizMsgIdr: "M12345678abcDEF01234567890123456",
-        status: "RJCT",
-        rejectReasonCode: "AB09",
-      }),
-    );
-  }
 }

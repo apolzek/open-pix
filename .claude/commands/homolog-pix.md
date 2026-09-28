@@ -19,9 +19,9 @@ Provide detailed guidance for the specified phase:
 - **Phase 1**: Prerequisites — Read `docs/playbook/01-prerequisites.md` and guide through setup
 - **Phase 2**: Basic Connectivity — Read `docs/playbook/02-basic-connectivity.md` and walk through ICOM connection
 - **Phase 3**: SPI Functionality — Read `docs/playbook/03-spi-functionality.md` and guide through pacs.008/002/004 testing
-- **Phase 4**: SPI Capacity — Read `docs/playbook/04-spi-capacity.md` and help prepare for the 20k transaction test
+- **Phase 4**: SPI Capacity — Read `docs/playbook/04-spi-capacity.md` and help prepare for the capacity test (1,000 / 2,000 / 4,000 pacs.008 per minute for 10 minutes, sent and received)
 - **Phase 5**: DICT Functionality — Read `docs/playbook/05-dict-functionality.md` and guide through key/claim/MED testing
-- **Phase 6**: DICT Capacity — Read `docs/playbook/06-dict-capacity.md` and help prepare for 1000+ lookup test
+- **Phase 6**: DICT Capacity — Read `docs/playbook/06-dict-capacity.md` and help prepare for the DICT lookup load test
 - **Phase 7**: Advanced Features — Read `docs/playbook/07-advanced-features.md` for QR codes, Pix Automatico, MED 2.0
 - **Phase 8**: Go-Live — Read `docs/playbook/08-go-live.md` for production cutover checklist
 
@@ -42,9 +42,11 @@ For each, explain what the script does, ask for required parameters, then run it
 Match the error against known patterns and provide solutions:
 - Read `docs/playbook/pitfalls.md` and `docs/reference/error-codes.md`
 - Common patterns:
-  - "Schema desconhecido" → wrong pacs version (try 1.13)
-  - "403" → forbidden headers from APM tools, or invalid certificate
-  - "AB03" → pacs.002 response too slow (>10s timeout)
+  - "Schema desconhecido ou não habilitado" → message version not enabled; check `GET /api/v1/in/catalog` (catalog 5.13: pacs.008 1.16, pacs.002 1.17, pacs.004 1.5) instead of guessing
+  - "403" / refused request → headers outside the ICOM whitelist (APM tracing headers), `Host` with port, or invalid certificate
+  - "415" → `Content-Type` must be `application/xml; charset=utf-8` (or `multipart/mixed`)
+  - "429" → token bucket exhausted (honor `Retry-After`) or more than 6 read streams
+  - "AB03" → the SPI timed out: the Pix was not settled within 40s of `AccptncDtTm` (check the receiver's pacs.002 latency, target p50 1.4s / p95 2.3s, and the payer's stream consumption)
   - "502" → transient Bacen error (retry with backoff)
   - "connection refused" → mTLS cert issue or network connectivity
   - "EPERM" / "ECONNRESET" → TCP connection pool exhaustion
@@ -75,15 +77,23 @@ Ask the user for their ISPB and partner ISPB, then generate appropriate test dat
 ## Key Constants (always available)
 | Parameter | Value |
 |-----------|-------|
-| ICOM URL (homolog) | `https://icom-h.pi.rsfn.net.br:16522/api/v1/in/{ISPB}/msgs` |
-| Bacen SPI ISPB | 99999004 |
-| Bacen DICT ISPB | 99999060 |
-| Max polling connections | 6 |
-| SPI capacity target | 20,000 txns in 10min |
-| DICT capacity target | 1,000+ key lookups |
-| pacs.002 timeout | ~10 seconds |
-| E2E ID format | `E{ISPB 8}{YYYYMMDD}{HHMM}{random}` (32 chars) |
-| BizMsgIdr format | `M{ISPB 8}{random}` (32 chars) |
+| ICOM host (homolog) | `https://icom-h.pi.rsfn.net.br:16522` (secondary `icom-sec-h.pi.rsfn.net.br:17522`) |
+| ICOM send | `POST /api/v1/in/{ISPB}/msgs` (up to 10 messages as multipart/mixed) |
+| ICOM receive | `GET /api/v1/out/{ISPB}/stream/start`, then GET each `PI-Pull-Next`, finish with `DELETE` of the last `PI-Pull-Next` |
+| ICOM catalog | `GET /api/v1/in/catalog`, `GET /api/v1/out/catalog` |
+| DICT base (homolog) | `https://dict-h.pi.rsfn.net.br:16522/api/v2/` |
+| SPI ISPB (AppHdr `To` of everything you send) | 00038166 |
+| Virtual creditor (answers ACSP) | 99999A04 (Cooperativa de Crédito Virtual) |
+| Virtual payer (receiving tests) | 99999A03 (Banco Virtual) |
+| DICT virtual participant | none in the official documents; 99999060 is unverified |
+| Message versions (catalog 5.13) | pacs.008 1.16, pacs.002 1.17, pacs.004 1.5; namespace `https://www.bcb.gov.br/pi/pacs.008/1.16`, MsgDefIdr `pacs.008.spi.1.16` |
+| Max read streams | 6 per participant and channel |
+| SPI capacity target | 10,000 / 20,000 / 40,000 pacs.008 in 10 min (≤1M / ≤10M / >10M accounts), sent and received; 99% consumed within 200 ms |
+| Settlement limit | 40 seconds from `AccptncDtTm`; after that the SPI rejects with AB03 |
+| Receiving PSP SLA | p50 1.4s, p95 2.3s |
+| Timestamps | UTC with milliseconds: `YYYY-MM-DDThh:mm:ss.sssZ` |
+| E2E ID format | `E{ISPB [0-9A-Z]{8}}{yyyyMMddHHmm UTC}{11 alphanumeric}` (32 chars) |
+| BizMsgIdr format | `M{ISPB [0-9A-Z]{8}}{23 alphanumeric}` (32 chars) |
 
 ## Behavior Guidelines
 - Always reference the specific playbook/reference docs when answering questions
@@ -91,5 +101,6 @@ Ask the user for their ISPB and partner ISPB, then generate appropriate test dat
 - Warn about known pitfalls proactively (read `docs/playbook/pitfalls.md`)
 - If the user seems stuck, suggest the next logical step in the homologation process
 - Keep responses practical and actionable — this is a hands-on toolkit
+- Treat Bacen's official documents as the authority (copies of the SPI XSDs and DICT OpenAPI are in `simulator/spec/`; `npm run test:simulator` validates generated messages); flag anything else as practical experience
 
 $ARGUMENTS
