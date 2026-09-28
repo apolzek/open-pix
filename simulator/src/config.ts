@@ -40,8 +40,13 @@ export const config = {
 
   /** Quando falso, sobe em HTTP puro para facilitar depuracao. */
   tlsEnabled: bool("SIM_TLS", true),
-  /** Quando falso, aceita o elemento Signature vazio nas escritas do DICT. */
-  verifySignature: bool("SIM_VERIFY_SIGNATURE", true),
+  /**
+   * Quando verdadeiro, recusa escritas no DICT com Signature vazio. Fica
+   * desligado ate a assinatura XMLDSig ser implementada (core/signature.ts).
+   */
+  verifySignature: bool("SIM_VERIFY_SIGNATURE", false),
+  /** Valida cada mensagem do SPI contra o XSD oficial (precisa de xmllint). */
+  validateXsd: bool("SIM_VALIDATE_XSD", true),
   /** Quando falso, aceita qualquer header HTTP no ICOM. */
   enforceHeaderWhitelist: bool("SIM_ENFORCE_HEADERS", true),
 
@@ -73,6 +78,16 @@ export const config = {
   maxMessagesPerStream: num("SIM_MAX_MSGS_PER_STREAM", 10),
   /** Tempo maximo que uma leitura sem mensagem fica pendurada. O manual so diz "alguns segundos". */
   longPollMs: num("SIM_LONG_POLL_MS", 3_000),
+  /** Stream sem leitura por esse tempo e descartado; o lote nao confirmado volta para a fila. */
+  streamIdleMs: num("SIM_STREAM_IDLE_MS", 60_000),
+  /** Tempo que os participantes virtuais levam para responder. */
+  virtualReplyMs: num("SIM_VIRTUAL_REPLY_MS", 200),
+
+  /**
+   * Participantes diretos cadastrados na partida, no formato
+   * ISPB:Nome:saldoEmReais separados por virgula.
+   */
+  participants: str("SIM_PARTICIPANTS", "10000001:Banco Alfa:1000000,20000002:Banco Beta:1000000"),
 
   /** Categoria do participante (A a H), define o balde do antiscan do DICT. */
   participantCategory: str("SIM_PARTICIPANT_CATEGORY", "C"),

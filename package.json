@@ -21,7 +21,10 @@
     "dict:refund": "tsx scripts/dict/refund-helper.ts",
     "test:spi-capacity": "k6 run scripts/spi/k6-spi-capacity.js",
     "test:dict-capacity": "k6 run scripts/dict/k6-dict-capacity.js",
-    "test:simulator": "tsx --test simulator/test/*.test.ts"
+    "test:simulator": "tsx --test simulator/test/*.test.ts apps/banco-digital/test/*.test.ts",
+    "sim:certs": "tsx simulator/tools/gen-certs.ts",
+    "sim:start": "NODE_OPTIONS=--no-deprecation tsx simulator/src/main.ts",
+    "demo": "NODE_OPTIONS=--no-deprecation tsx apps/banco-digital/src/demo.ts"
   },
   "dependencies": {
     "fast-xml-parser": "^4.3.0",

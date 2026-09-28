@@ -17,7 +17,8 @@
   "include": [
     "scripts/**/*.ts",
     "config/**/*.ts",
-    "simulator/**/*.ts"
+    "simulator/**/*.ts",
+    "apps/**/*.ts"
   ],
   "exclude": [
     "node_modules",

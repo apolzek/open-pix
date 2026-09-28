@@ -29,6 +29,7 @@ export const SPI_MESSAGE_VERSIONS = {
   "pacs.008": "1.16",
   "pacs.002": "1.17",
   "pacs.004": "1.5",
+  "admi.002": "1.5",
 } as const;
 
 export type SpiMessageType = keyof typeof SPI_MESSAGE_VERSIONS;

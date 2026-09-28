@@ -49,10 +49,16 @@ export interface Pacs002Params {
   rejectReasonCode?: string;
   additionalInfo?: string;
   bizMsgIdr?: string;
+  /**
+   * Set by the SPI on ACSC/ACCC: moment of settlement (FctvIntrBkSttlmDt)
+   * and settlement date (OrgnlTxRef/IntrBkSttlmDt), as in the SPI examples.
+   */
+  settledAt?: Date;
 }
 
 export function generatePacs002(params: Pacs002Params): string {
   if (!END_TO_END_ID_PATTERN.test(params.originalEndToEndId)) {
+    // OrgnlEndToEndId is always the E id, also when answering a pacs.004.
     throw new Error(`Invalid OrgnlEndToEndId: ${params.originalEndToEndId}`);
   }
   if (params.status === "RJCT" && !params.rejectReasonCode) {
@@ -76,6 +82,18 @@ export function generatePacs002(params: Pacs002Params): string {
         </StsRsnInf>`
       : "";
 
+  // The settlement date follows the Brasilia calendar (assumption: the
+  // catalog examples only show a date).
+  const settlement = params.settledAt
+    ? `
+        <FctvIntrBkSttlmDt>
+            <DtTm>${isoUtc(params.settledAt)}</DtTm>
+        </FctvIntrBkSttlmDt>
+        <OrgnlTxRef>
+            <IntrBkSttlmDt>${new Date(params.settledAt.getTime() - 3 * 3600_000).toISOString().slice(0, 10)}</IntrBkSttlmDt>
+        </OrgnlTxRef>`
+    : "";
+
   const document = `<FIToFIPmtStsRpt>
     <GrpHdr>
         <MsgId>${bizMsgIdr}</MsgId>
@@ -84,7 +102,7 @@ export function generatePacs002(params: Pacs002Params): string {
     <TxInfAndSts>
         <OrgnlInstrId>${params.originalInstructionId ?? params.originalEndToEndId}</OrgnlInstrId>
         <OrgnlEndToEndId>${params.originalEndToEndId}</OrgnlEndToEndId>
-        <TxSts>${params.status}</TxSts>${reason}
+        <TxSts>${params.status}</TxSts>${reason}${settlement}
     </TxInfAndSts>
 </FIToFIPmtStsRpt>`;
 

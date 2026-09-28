@@ -95,7 +95,7 @@ export class RateLimiter {
   /** Quando falso, contabiliza mas nunca recusa. Util para depurar. */
   enabled = true;
 
-  constructor(private category: string = "C") {}
+  constructor(public category: string = "C") {}
 
   setCategory(category: string): void {
     if (!PARTICIPANT_CATEGORIES[category]) return;

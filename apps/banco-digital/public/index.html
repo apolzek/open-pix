@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Banco Digital · Open Pix</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <div>
+        <h1 id="bank-name">Banco</h1>
+        <p class="sub">ISPB <span id="bank-ispb">—</span> · participante direto do SPI (simulado)</p>
+      </div>
+    </div>
+    <nav class="customers" id="customers" aria-label="Clientes"></nav>
+  </header>
+
+  <main class="layout">
+    <section class="app" aria-label="App do cliente">
+      <div class="card balance">
+        <p class="muted">Saldo disponível de <strong id="customer-name">—</strong></p>
+        <p class="amount" id="balance">R$ 0,00</p>
+        <p class="muted small">Agência <span id="branch"></span> · Conta <span id="account"></span> · <span id="doc"></span></p>
+      </div>
+
+      <div class="card">
+        <div class="tabs" role="tablist">
+          <button role="tab" data-tab="key" class="active">Pix por chave</button>
+          <button role="tab" data-tab="qr">Pagar QR Code</button>
+          <button role="tab" data-tab="manual">Por agência e conta</button>
+          <button role="tab" data-tab="receive">Receber</button>
+        </div>
+
+        <form class="tab-panel" data-panel="key" id="form-key">
+          <label>Chave Pix do recebedor
+            <input name="key" placeholder="e-mail, telefone +55..., CPF, CNPJ ou aleatória" required autocomplete="off">
+          </label>
+          <div class="hint">Experimente: <button type="button" class="chip" data-fill="maria@beta.com.br">maria@beta.com.br</button><button type="button" class="chip" data-fill="+5511988887777">+5511988887777</button><button type="button" class="chip" data-fill="naoexiste@x.com">chave inexistente</button></div>
+          <button class="primary" type="submit">Consultar chave</button>
+        </form>
+
+        <form class="tab-panel hidden" data-panel="qr" id="form-qr">
+          <label>Pix Copia e Cola (payload do QR Code estático)
+            <textarea name="qr" rows="3" placeholder="000201..." required></textarea>
+          </label>
+          <button class="primary" type="submit">Ler QR Code</button>
+        </form>
+
+        <form class="tab-panel hidden" data-panel="manual" id="form-manual">
+          <div class="grid2">
+            <label>ISPB do banco<input name="ispb" placeholder="20000002" required pattern="[0-9A-Z]{8}"></label>
+            <label>Tipo de conta
+              <select name="accountType"><option value="CACC">Corrente (CACC)</option><option value="SVGS">Poupança (SVGS)</option><option value="TRAN">Pagamento (TRAN)</option></select>
+            </label>
+            <label>Agência<input name="branch" placeholder="7" inputmode="numeric"></label>
+            <label>Conta<input name="account" placeholder="20001" required></label>
+            <label>CPF/CNPJ do titular<input name="document" placeholder="98765432100" required></label>
+            <label>Valor (R$)<input name="amount" placeholder="10,00" required inputmode="decimal"></label>
+          </div>
+          <div class="hint">Use ISPB <button type="button" class="chip" data-manual="99999A04">99999A04</button> (cooperativa virtual do Bacen, aceita tudo) ou <button type="button" class="chip" data-manual="30000003">30000003</button> (banco inexistente: RC10).</div>
+          <button class="primary" type="submit">Enviar Pix</button>
+        </form>
+
+        <form class="tab-panel hidden" data-panel="receive" id="form-receive">
+          <div class="grid2">
+            <label>Sua chave<select name="key" id="receive-key"></select></label>
+            <label>Valor (opcional)<input name="amount" placeholder="25,00" inputmode="decimal"></label>
+            <label>txid (opcional)<input name="txId" placeholder="PEDIDO123" pattern="[a-zA-Z0-9]{1,25}"></label>
+          </div>
+          <button class="primary" type="submit">Gerar QR Code estático</button>
+          <div id="qr-out" class="qr-out hidden">
+            <p class="muted small">Copie e cole no outro banco, aba "Pagar QR Code":</p>
+            <code id="qr-payload"></code>
+            <button type="button" class="secondary" id="copy-qr">Copiar</button>
+          </div>
+        </form>
+
+        <div id="confirm" class="confirm hidden" aria-live="polite">
+          <p class="muted">Você está pagando</p>
+          <p class="who" id="confirm-name"></p>
+          <p class="muted small" id="confirm-meta"></p>
+          <div class="grid2">
+            <label>Valor (R$)<input id="confirm-amount" placeholder="50,00" inputmode="decimal"></label>
+            <label>Mensagem (opcional)<input id="confirm-desc" maxlength="140"></label>
+          </div>
+          <div class="row">
+            <button class="primary" id="confirm-go">Confirmar Pix</button>
+            <button class="secondary" id="confirm-cancel">Cancelar</button>
+          </div>
+        </div>
+        <p id="feedback" class="feedback" role="status"></p>
+      </div>
+
+      <div class="card">
+        <div class="row between">
+          <h2>Minhas chaves</h2>
+          <form id="form-newkey" class="inline">
+            <select name="type"><option value="EMAIL">E-mail</option><option value="PHONE">Telefone</option><option value="CPF">CPF/CNPJ</option><option value="EVP">Aleatória</option></select>
+            <input name="key" placeholder="valor da chave">
+            <button class="secondary" type="submit">Cadastrar no DICT</button>
+          </form>
+        </div>
+        <ul id="keys" class="keys"></ul>
+      </div>
+
+      <div class="card lab">
+        <h2>Laboratório</h2>
+        <label class="toggle"><input type="checkbox" id="lab-offline">
+          <span><strong>Banco fora do ar</strong><br><span class="muted small">Para de ler o ICOM. Pix enviados para cá ficam sem resposta e, 40 s após o aceite, o SPI rejeita com AB03.</span></span>
+        </label>
+        <label class="toggle"><input type="checkbox" id="lab-blocked">
+          <span><strong>Envio bloqueado no SPI</strong><br><span class="muted small">Como o bloqueio manual no SPI-Web: os Pix deste banco são rejeitados com DS02.</span></span>
+        </label>
+      </div>
+
+      <div class="card">
+        <h2>Extrato</h2>
+        <ul id="statement" class="statement"></ul>
+      </div>
+    </section>
+
+    <section class="logs" aria-label="O que aconteceu por trás">
+      <div class="card log">
+        <div class="row between">
+          <h2>Diário do banco</h2>
+          <span class="muted small">cada passo, e o porquê</span>
+        </div>
+        <ol id="journey" class="journey"></ol>
+      </div>
+      <div class="card log">
+        <div class="row between">
+          <h2>Bacen <span class="muted small">(ICOM · SPI · DICT simulados)</span></h2>
+          <label class="small muted"><input type="checkbox" id="only-mine" checked> só deste banco</label>
+        </div>
+        <ol id="bacen" class="bacen"></ol>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

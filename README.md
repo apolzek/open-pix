@@ -43,6 +43,19 @@ npx tsx scripts/spi/pacs008-generator.ts <YOUR_ISPB> 99999A04
 npx tsx scripts/qrcode/qr-parser.ts "<payload>"
 ```
 
+## Pix simulator and study bank
+
+To practice without Bacen's network, the repo ships a simulated Bacen side and
+a digital bank web app that talks to it like a real PSP:
+
+```bash
+npm run demo        # Bacen simulator + Banco Alfa (:3001) + Banco Beta (:3002)
+npm run sim:start   # only the simulator (ICOM :16522, DICT :16523, control :18080)
+```
+
+- [`simulator/`](simulator/README.md): ICOM (send, stream, PI-Pull-Next, DELETE, limits), SPI (XSD validation, routing, settlement on PI accounts, rejections, AB03 after 40 s), virtual participants 99999A04/99999A03 and a DICT subset with antiscan buckets.
+- [`apps/banco-digital/`](apps/banco-digital/README.md): web app (in Portuguese) that shows every step of a Pix, with the reason behind it, in the browser and in the console.
+
 ## Claude Code Integration
 
 If you use [Claude Code](https://claude.com/claude-code), the `/homolog-pix` skill provides an interactive guide:

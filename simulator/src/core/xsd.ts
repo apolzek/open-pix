@@ -19,6 +19,7 @@ const SCHEMAS: Record<string, string> = {
   "https://www.bcb.gov.br/pi/pacs.008/1.16": "pacs.008.spi.1.16.xsd",
   "https://www.bcb.gov.br/pi/pacs.002/1.17": "pacs.002.spi.1.17.xsd",
   "https://www.bcb.gov.br/pi/pacs.004/1.5": "pacs.004.spi.1.5.xsd",
+  "https://www.bcb.gov.br/pi/admi.002/1.5": "admi.002.spi.1.5.xsd",
 };
 
 export interface XsdResult {
