@@ -23,8 +23,8 @@ function str(name: string, fallback: string): string {
 }
 
 export const config = {
-  /** ISPB do participante virtual que representa o SPI. */
-  spiIspb: str("SIM_SPI_ISPB", "99999004"),
+  /** ISPB do SPI, que e o proprio Bacen (campo To das mensagens). */
+  spiIspb: str("SIM_SPI_ISPB", "00038166"),
   /** ISPB do participante virtual que representa o DICT. */
   dictIspb: str("SIM_DICT_ISPB", "99999060"),
 
@@ -44,22 +44,37 @@ export const config = {
 
   certDir: str("SIM_CERT_DIR", new URL("../certs/", import.meta.url).pathname),
 
-  /** Versao de catalogo SPI aceita. Mensagem com outra versao e recusada. */
-  activeSpiVersion: str("SIM_SPI_VERSION", "1.13"),
+  /** Versao do Catalogo de Mensagens e Servicos do SPI. */
+  spiCatalogVersion: str("SIM_SPI_CATALOG", "5.13"),
+  /**
+   * Versao aceita de cada mensagem no catalogo 5.13. Vai no namespace
+   * (https://www.bcb.gov.br/pi/pacs.008/1.16) e no MsgDefIdr (pacs.008.spi.1.16).
+   * Mensagem com outra versao e recusada.
+   */
+  spiMessageVersions: {
+    "pacs.008": str("SIM_PACS008_VERSION", "1.16"),
+    "pacs.002": str("SIM_PACS002_VERSION", "1.17"),
+    "pacs.004": str("SIM_PACS004_VERSION", "1.5"),
+  },
 
-  /** Prazo para o PSP credor responder o pacs.008 antes do AB03 automatico. */
-  pacs002TimeoutMs: num("SIM_PACS002_TIMEOUT_MS", 10_000),
-  /** Teto de conexoes simultaneas de leitura por ISPB no ICOM. */
+  /**
+   * Limite ponta a ponta da liquidacao no Manual de Tempos do Pix: 40s entre o
+   * aceite do pagador e a liquidacao. Estourado, o SPI rejeita com AB03.
+   */
+  settlementTimeoutMs: num("SIM_SETTLEMENT_TIMEOUT_MS", 40_000),
+  /** Teto de conexoes simultaneas de leitura por ISPB e canal no ICOM; acima disso, 429. */
   maxPollConnections: num("SIM_MAX_POLL_CONNECTIONS", 6),
   /** Teto de mensagens devolvidas por leitura de stream. */
   maxMessagesPerStream: num("SIM_MAX_MSGS_PER_STREAM", 10),
-  /** Tempo maximo que uma leitura sem mensagem fica pendurada. */
+  /** Tempo maximo que uma leitura sem mensagem fica pendurada. O manual so diz "alguns segundos". */
   longPollMs: num("SIM_LONG_POLL_MS", 3_000),
 
-  /** Categoria do participante, define o balde do antiscan do DICT. */
+  /** Categoria do participante (A a H), define o balde do antiscan do DICT. */
   participantCategory: str("SIM_PARTICIPANT_CATEGORY", "C"),
   /** Prazo de resolucao de reivindicacao, sete dias no Bacen. */
   claimResolutionDays: num("SIM_CLAIM_RESOLUTION_DAYS", 7),
+  /** Periodo de encerramento da reivindicacao de posse, mais sete dias. */
+  claimCompletionDays: num("SIM_CLAIM_COMPLETION_DAYS", 7),
 
   snapshotPath: str("SIM_SNAPSHOT", ""),
   logLevel: str("SIM_LOG_LEVEL", "info"),

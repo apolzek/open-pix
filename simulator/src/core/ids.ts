@@ -9,14 +9,13 @@ import crypto from "node:crypto";
 
 const ALPHANUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
-/** Recorta a data e a hora no fuso de Brasilia, que e o que o E2E usa. */
-function brtParts(at: Date = new Date()): { date: string; time: string } {
-  const brt = new Date(at.getTime() - 3 * 60 * 60 * 1000);
-  const y = brt.getUTCFullYear().toString();
-  const mo = String(brt.getUTCMonth() + 1).padStart(2, "0");
-  const d = String(brt.getUTCDate()).padStart(2, "0");
-  const h = String(brt.getUTCHours()).padStart(2, "0");
-  const mi = String(brt.getUTCMinutes()).padStart(2, "0");
+/** Recorta a data e a hora em UTC, que e o que o E2E usa (Catalogo SPI). */
+function utcParts(at: Date = new Date()): { date: string; time: string } {
+  const y = at.getUTCFullYear().toString();
+  const mo = String(at.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(at.getUTCDate()).padStart(2, "0");
+  const h = String(at.getUTCHours()).padStart(2, "0");
+  const mi = String(at.getUTCMinutes()).padStart(2, "0");
   return { date: `${y}${mo}${d}`, time: `${h}${mi}` };
 }
 
@@ -27,12 +26,17 @@ function randomAlphanum(len: number): string {
   return out;
 }
 
+/**
+ * EndToEndId (prefixo E) ou RtrId de devolucao (prefixo D). O RtrId e campo
+ * proprio do pacs.004; o OrgnlEndToEndId continua sendo o E original.
+ */
 export function generateEndToEndId(ispb: string, devolution = false): string {
-  const { date, time } = brtParts();
+  const { date, time } = utcParts();
   return `${devolution ? "D" : "E"}${ispb}${date}${time}${randomAlphanum(11)}`;
 }
 
-export const E2E_PATTERN = /^[ED]\d{8}\d{8}\d{4}[A-Za-z0-9]{11}$/;
+/** O ISPB aceita letra maiuscula: os participantes virtuais sao 99999A03/99999A04. */
+export const E2E_PATTERN = /^[ED][0-9A-Z]{8}\d{8}\d{4}[A-Za-z0-9]{11}$/;
 
 export interface E2eCheck {
   valid: boolean;
@@ -47,7 +51,7 @@ export function checkEndToEndId(value: string): E2eCheck {
     return { valid: false, reason: `tamanho deve ser 32, recebido ${value?.length ?? 0}` };
   }
   if (!E2E_PATTERN.test(value)) {
-    return { valid: false, reason: "nao casa com o padrao [ED] + ISPB + AAAAMMDD + HHMM + 11 alfanumericos" };
+    return { valid: false, reason: "nao casa com o padrao [ED] + ISPB + AAAAMMDD + HHMM (UTC) + 11 alfanumericos" };
   }
   const month = Number(value.slice(13, 15));
   const day = Number(value.slice(15, 17));
@@ -60,8 +64,9 @@ export function checkEndToEndId(value: string): E2eCheck {
   return { valid: true, ispb: value.slice(1, 9), devolution: value[0] === "D" };
 }
 
+/** MsgId/BizMsgIdr do SPI: M + ISPB + 23 alfanumericos, 32 posicoes. */
 export function generateBizMsgIdr(ispb: string): string {
-  return `M${ispb}${brtParts().date}${randomAlphanum(15)}`;
+  return `M${ispb}${randomAlphanum(23)}`;
 }
 
 export function uuid(): string {
@@ -101,14 +106,10 @@ export function correlationId(): string {
   return crypto.randomBytes(16).toString("hex");
 }
 
-/** Data no formato que o DICT usa: ISO 8601 UTC com milissegundos. */
+/**
+ * Data e hora no formato que o SPI e o DICT usam: ISO 8601 em UTC com
+ * milissegundos, YYYY-MM-DDThh:mm:ss.sssZ.
+ */
 export function isoNow(at: Date = new Date()): string {
-  return at.toISOString().replace(/\.(\d{3})Z$/, ".$1Z");
-}
-
-/** Data e hora no formato que o SPI usa: ISO 8601 com offset de Brasilia. */
-export function isoBrt(at: Date = new Date()): string {
-  const brt = new Date(at.getTime() - 3 * 60 * 60 * 1000);
-  const base = brt.toISOString().replace("Z", "");
-  return `${base}-03:00`;
+  return at.toISOString();
 }

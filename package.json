@@ -20,7 +20,8 @@
     "dict:infraction": "tsx scripts/dict/infraction-helper.ts",
     "dict:refund": "tsx scripts/dict/refund-helper.ts",
     "test:spi-capacity": "k6 run scripts/spi/k6-spi-capacity.js",
-    "test:dict-capacity": "k6 run scripts/dict/k6-dict-capacity.js"
+    "test:dict-capacity": "k6 run scripts/dict/k6-dict-capacity.js",
+    "test:simulator": "tsx --test simulator/test/*.test.ts"
   },
   "dependencies": {
     "fast-xml-parser": "^4.3.0",
