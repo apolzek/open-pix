@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pix XPTO → ABCD</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Pix <span class="xpto-t">XPTO</span> → <span class="abcd-t">ABCD</span></h1>
+      <p class="sub">Dois PSPs falando com o Bacen simulado pelo DICT e pelo ICOM, com mTLS e mensagens do catálogo SPI 5.13.</p>
+    </div>
+    <a id="ctl-link" class="ctl" target="_blank" rel="noopener">API de controle ↗</a>
+  </header>
+
+  <main class="grid">
+    <!-- Banco XPTO: quem paga -->
+    <section class="bank xpto">
+      <div class="bank-head">
+        <span class="badge">XPTO</span>
+        <div><h2>Banco XPTO</h2><small>ISPB 40000004 · pagador</small></div>
+      </div>
+
+      <form id="pix-form" class="card">
+        <label>Cliente
+          <select id="from"></select>
+        </label>
+        <label>Chave Pix no ABCD
+          <input id="key" required autocomplete="off" placeholder="lucas@abcd.com.br" />
+        </label>
+        <div id="key-chips" class="chips"></div>
+        <div class="row">
+          <label>Valor (R$)
+            <input id="amount" required inputmode="decimal" value="25,00" />
+          </label>
+          <label>Mensagem
+            <input id="desc" maxlength="140" placeholder="opcional" />
+          </label>
+        </div>
+        <button id="send" type="submit">Enviar Pix</button>
+        <p id="feedback" class="feedback" role="status"></p>
+      </form>
+
+      <div class="card">
+        <h3>Clientes</h3>
+        <ul id="xpto-customers" class="customers"></ul>
+      </div>
+      <div class="card">
+        <h3>Extrato</h3>
+        <ul id="xpto-txs" class="txs"></ul>
+      </div>
+    </section>
+
+    <!-- Bacen -->
+    <section class="bacen">
+      <div class="lanes" aria-hidden="true">
+        <div class="node n-xpto">XPTO</div>
+        <div id="wire-left" class="wire"><span></span></div>
+        <div class="node n-bacen">Bacen<small>DICT · ICOM · SPI</small></div>
+        <div id="wire-right" class="wire"><span></span></div>
+        <div class="node n-abcd">ABCD</div>
+      </div>
+
+      <div class="card">
+        <div class="track-head">
+          <h3>Pix atual</h3>
+          <code id="e2e">nenhum ainda</code>
+        </div>
+        <ol id="track" class="track"></ol>
+      </div>
+
+      <div class="card">
+        <h3>Contas PI no Bacen</h3>
+        <div id="pi" class="pi"></div>
+        <p class="hint">É aqui que o dinheiro se move de verdade: o SPI debita a conta PI do banco pagador e credita a do recebedor. O saldo do cliente é contabilidade de cada banco.</p>
+      </div>
+    </section>
+
+    <!-- Banco ABCD: quem recebe -->
+    <section class="bank abcd">
+      <div class="bank-head">
+        <span class="badge">ABCD</span>
+        <div><h2>Banco ABCD</h2><small>ISPB 50000005 · recebedor</small></div>
+      </div>
+
+      <div class="card">
+        <h3>Clientes</h3>
+        <ul id="abcd-customers" class="customers"></ul>
+      </div>
+      <div class="card">
+        <h3>Extrato</h3>
+        <ul id="abcd-txs" class="txs"></ul>
+      </div>
+      <div class="card lab">
+        <h3>Laboratório</h3>
+        <label class="toggle">
+          <input id="offline" type="checkbox" />
+          <span>ABCD fora do ar</span>
+        </label>
+        <p class="hint">O ABCD para de ler o ICOM. Envie um Pix: o SPI espera 40 s desde o aceite e rejeita com <code>AB03</code>, devolvendo o valor ao pagador.</p>
+      </div>
+    </section>
+  </main>
+
+  <section class="card log-card">
+    <div class="log-head">
+      <h3>Linha do tempo</h3>
+      <div class="filters">
+        <label><input type="checkbox" data-src="XPTO" checked /> XPTO</label>
+        <label><input type="checkbox" data-src="BACEN" checked /> Bacen</label>
+        <label><input type="checkbox" data-src="ABCD" checked /> ABCD</label>
+        <button id="clear" type="button" class="ghost">limpar</button>
+      </div>
+    </div>
+    <ol id="log" class="log"></ol>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>

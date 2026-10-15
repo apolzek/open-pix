@@ -24,7 +24,8 @@
     "test:simulator": "tsx --test simulator/test/*.test.ts apps/banco-digital/test/*.test.ts",
     "sim:certs": "tsx simulator/tools/gen-certs.ts",
     "sim:start": "NODE_OPTIONS=--no-deprecation tsx simulator/src/main.ts",
-    "demo": "NODE_OPTIONS=--no-deprecation tsx apps/banco-digital/src/demo.ts"
+    "demo": "NODE_OPTIONS=--no-deprecation tsx apps/banco-digital/src/demo.ts",
+    "xpto-abcd": "NODE_OPTIONS=--no-deprecation tsx apps/xpto-abcd/src/server.ts"
   },
   "dependencies": {
     "fast-xml-parser": "^4.3.0",
